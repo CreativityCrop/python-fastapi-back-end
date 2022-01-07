@@ -9,8 +9,8 @@ PROJECT_NAME = "creativitycrop"
 VERSION = "1.0.0"
 API_PREFIX = "/api"
 
-STRIPE_API_KEY = config("STRIPE_API_KEY", cast=Secret, default='sk_test_51Jx4d2Ldhfi7be41P1vPbJ4zd47yIWOii662BD' \
-                                                               '9HIqUK14y3N8p57jbIt6sCKHNra0U1NzkAnZeaBUjHyZjRO' \
+STRIPE_API_KEY = config("STRIPE_API_KEY", cast=Secret, default='sk_test_51Jx4d2Ldhfi7be41P1vPbJ4zd47yIWOii662BD'
+                                                               '9HIqUK14y3N8p57jbIt6sCKHNra0U1NzkAnZeaBUjHyZjRO'
                                                                'Yg300EhrWWoMB')
 
 SUPER_USERS = config("SUPER_USERS", cast=set, default={"georgi", "zorry"})
@@ -29,7 +29,7 @@ JWT_SECRET_KEY = config("JWT_SECRET_KEY", cast=Secret,
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES = config(
     "JWT_ACCESS_TOKEN_EXPIRE_MINUTES",
     cast=int,
-    default= 60 # one hour
+    default=60  # one hour
 )
 JWT_ALGORITHM = config("JWT_ALGORITHM", cast=str, default="HS256")
 JWT_AUDIENCE = config("JWT_AUDIENCE", cast=str, default="creativitycrop")
