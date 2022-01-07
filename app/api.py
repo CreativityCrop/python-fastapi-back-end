@@ -1,5 +1,6 @@
 import json
 from datetime import datetime
+from typing import Optional
 
 import mysql.connector
 from fastapi import FastAPI, HTTPException, Header
@@ -26,13 +27,13 @@ origins = [
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],#origins,
+    allow_origins=["*"],  # origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"]
 )
 
-db: mysql.connector.connect()
+db = mysql.connector.connect()
 
 
 @app.on_event("startup")
@@ -124,6 +125,16 @@ async def get_idea_by_id(idea_id: str, token: str = Header(None, convert_undersc
         })
 
     return result
+
+
+@app.get("/api/ideas/get")
+async def get_ideas(start: int = 0, end: int = 10):
+    db.ping(reconnect=True, attempts=3, delay=5)
+    cursor = db.cursor(dictionary=True)
+    query = "SELECT * FROM ideas ORDER BY date_publish DESC LIMIT %s, %s"
+    cursor.execute(query, (start, end))
+    results = cursor.fetchall()
+    return results
 
 
 @app.post("/api/ideas/post")

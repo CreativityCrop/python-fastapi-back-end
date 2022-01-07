@@ -4,7 +4,7 @@ from passlib.context import CryptContext
 from starlette import status
 
 from app.models.user import UserPasswordUpdate
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from jose import JWTError, jwt
 
