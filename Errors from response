@@ -1,0 +1,14 @@
+Errors from response
+
+/auth
+/ideas
+/account
+
+/auth
+    -101 - Username is wrong/nonexistent
+    -102 - Password is wrong
+    -103 - Token is invalid
+/ideas
+    -201 - ID not valid
+    -202 - ID not found
+    -203 - Access denied

@@ -1,6 +1,5 @@
 import json
 from datetime import datetime
-from typing import Optional
 
 import mysql.connector
 from fastapi import FastAPI, HTTPException, Header
@@ -27,7 +26,7 @@ origins = [
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # origins,
+    allow_origins=origins,  # ["*"],  # ,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"]
@@ -50,13 +49,16 @@ async def startup_event():
 
 @app.post("/api/auth/register")
 async def register_user(user: UserRegister):
-    user.salt = auth.generate_salt()
-    db.ping(reconnect=True, attempts=3, delay=5)
+    salt = auth.generate_salt()
+    try:
+        db.ping(reconnect=True, attempts=3, delay=5)
+    except mysql.connector.errors.InterfaceError as ex:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=ex.__dict__)
     cursor = db.cursor()
     query = "INSERT INTO users(first_name, last_name, email, username, salt, pass_hash, date_register) " \
             "VALUES(%s, %s, %s, %s, %s, %s, %s)"
     data = (user.first_name, user.last_name, user.email, user.username,
-            user.salt, auth.hash_password(user.pass_hash, user.salt), datetime.now().isoformat())
+            salt, auth.hash_password(user.pass_hash, salt), datetime.now().isoformat())
     try:
         cursor.execute(query, data)
     except mysql.connector.errors.IntegrityError as ex:
@@ -81,9 +83,13 @@ async def login_user(user: UserLogin):
     result = cursor.fetchone()
 
     if result is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"error": "user not found"})
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={
+            "msg": "Username is wrong or nonexistent", "errno": 101
+        })
     if not auth.verify_password(user.pass_hash, result["salt"], result["pass_hash"]):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail={"error": "wrong password"})
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail={
+            "msg": "Password is wrong", "errno": 102
+        })
 
     query = "UPDATE users SET date_login = %s WHERE users.username LIKE %s;"
     cursor.execute(query, (datetime.now().isoformat(), user.username))
@@ -107,8 +113,10 @@ async def get_idea_by_id(idea_id: str, token: str = Header(None, convert_undersc
     # print(token)
     access_token = auth.verify_token(token)
     if len(idea_id) != len(hashlib.md5().hexdigest()):
-        raise HTTPException(status_code=status.HTTP_406_NOT_ACCEPTABLE, detail={"error": "id is not in the right "
-                                                                                         "format"})
+        raise HTTPException(status_code=status.HTTP_406_NOT_ACCEPTABLE, detail={
+            "msg": "ID validation failed, should be MD5 hash in hex format",
+            "errno": 201
+        })
 
     db.ping(reconnect=True, attempts=3, delay=5)
     cursor = db.cursor(dictionary=True)
@@ -118,10 +126,14 @@ async def get_idea_by_id(idea_id: str, token: str = Header(None, convert_undersc
     # print(result)
     cursor.close()
     if result is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={
+            "msg": "The idea was not found",
+            "errno": 202
+        })
     if result["buyer_id"] is not None and result["buyer_id"] is not access_token.user:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail={
-            "error": "The idea is not owned by the authenticated user"
+            "msg": "The idea is not owned by the authenticated user",
+            "errno": 203
         })
 
     return result
@@ -140,7 +152,10 @@ async def get_ideas(start: int = 0, end: int = 10):
 @app.post("/api/ideas/post")
 async def post_idea(idea: IdeaPost, token: str = Header(None, convert_underscores=False)):
     auth.verify_token(token)
-    db.ping(reconnect=True, attempts=3, delay=5)
+    try:
+        db.ping(reconnect=True, attempts=3, delay=5)
+    except mysql.connector.errors.InterfaceError as ex:
+        return ex.__dict__
     cursor = db.cursor()
     query = "INSERT INTO ideas(id, seller_id, title, short_desc, long_desc, categories," \
             " date_publish, date_expiry, price) VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s)"
@@ -158,7 +173,7 @@ async def post_idea(idea: IdeaPost, token: str = Header(None, convert_underscore
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
-    return '<script>window.location.replace("http://creativitycrop.tech/docs");</script>'
+    return '<script>window.location.replace("http://creativitycrop.tech");</script>'
 
 
 @app.on_event("shutdown")

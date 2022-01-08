@@ -55,6 +55,6 @@ class AuthService:
                 exp=payload.get("exp")
             )
         except JWTError as ex:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail={"failed": ex.__str__()})
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail={"msg": ex.__str__(), "errno": 103})
 
         return token_data
