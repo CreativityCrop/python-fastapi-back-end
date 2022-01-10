@@ -9,6 +9,7 @@ from starlette import status
 
 from app.models.user import UserRegister, UserLogin
 from app.models.idea import IdeaPost
+from app.models.token import AccessToken
 from app.authentication import AuthService
 from app.config import *
 import hashlib
@@ -71,16 +72,29 @@ async def register_user(user: UserRegister):
             "user": user.username
         }
     )
-    return {"access_token": access_token}
+    return {
+        "accessToken": access_token,
+        "expiresIn": JWT_ACCESS_TOKEN_EXPIRE_MINUTES,
+        "authUserState": {
+            "firstName": user.first_name,
+            "lastName": user.last_name,
+            "username": user.username,
+            "email": user.email
+        }
+    }
 
 
 @app.post("/api/auth/login")
 async def login_user(user: UserLogin):
-    db.ping(reconnect=True, attempts=3, delay=5)
+    try:
+        db.ping(reconnect=True, attempts=3, delay=5)
+    except mysql.connector.errors.InterfaceError as ex:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=ex.__dict__)
     cursor = db.cursor(dictionary=True)
     query = 'SELECT * FROM users WHERE username LIKE %s'
     cursor.execute(query, (user.username,))
     result = cursor.fetchone()
+    user_id = result["id"]
 
     if result is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={
@@ -95,12 +109,19 @@ async def login_user(user: UserLogin):
     cursor.execute(query, (datetime.now().isoformat(), user.username))
     access_token = auth.create_access_token(
         data={
-            "user": user.username
+            "user": user.username,
+            "user_id": user_id
         }
     )
     cursor.close()
     db.commit()
-    return {"access_token": access_token}
+    return {
+        "accessToken": access_token,
+        "expiresIn": JWT_ACCESS_TOKEN_EXPIRE_MINUTES,
+        "authUserState": {
+            "username": user.username
+        }
+    }
 
 
 @app.get("/api/auth/verify")
@@ -118,7 +139,10 @@ async def get_idea_by_id(idea_id: str, token: str = Header(None, convert_undersc
             "errno": 201
         })
 
-    db.ping(reconnect=True, attempts=3, delay=5)
+    try:
+        db.ping(reconnect=True, attempts=3, delay=5)
+    except mysql.connector.errors.InterfaceError as ex:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=ex.__dict__)
     cursor = db.cursor(dictionary=True)
     query = "SELECT * FROM ideas WHERE id LIKE %s"
     cursor.execute(query, (idea_id,))
@@ -130,7 +154,7 @@ async def get_idea_by_id(idea_id: str, token: str = Header(None, convert_undersc
             "msg": "The idea was not found",
             "errno": 202
         })
-    if result["buyer_id"] is not None and result["buyer_id"] is not access_token.user:
+    if result["buyer_id"] is not None and result["buyer_id"] is not access_token.user_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail={
             "msg": "The idea is not owned by the authenticated user",
             "errno": 203
@@ -141,7 +165,10 @@ async def get_idea_by_id(idea_id: str, token: str = Header(None, convert_undersc
 
 @app.get("/api/ideas/get")
 async def get_ideas(start: int = 0, end: int = 10):
-    db.ping(reconnect=True, attempts=3, delay=5)
+    try:
+        db.ping(reconnect=True, attempts=3, delay=5)
+    except mysql.connector.errors.InterfaceError as ex:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=ex.__dict__)
     cursor = db.cursor(dictionary=True)
     query = "SELECT * FROM ideas ORDER BY date_publish DESC LIMIT %s, %s"
     cursor.execute(query, (start, end))
@@ -151,15 +178,16 @@ async def get_ideas(start: int = 0, end: int = 10):
 
 @app.post("/api/ideas/post")
 async def post_idea(idea: IdeaPost, token: str = Header(None, convert_underscores=False)):
-    auth.verify_token(token)
+    token_data: AccessToken = auth.verify_token(token)
     try:
         db.ping(reconnect=True, attempts=3, delay=5)
     except mysql.connector.errors.InterfaceError as ex:
         return ex.__dict__
+    id = hashlib.md5(idea.long_desc.encode()).hexdigest()
     cursor = db.cursor()
     query = "INSERT INTO ideas(id, seller_id, title, short_desc, long_desc, categories," \
             " date_publish, date_expiry, price) VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s)"
-    data = (hashlib.md5(idea.long_desc.encode()).hexdigest(), 3, idea.title, idea.short_desc, idea.long_desc,
+    data = (id, token_data.user_id, idea.title, idea.short_desc, idea.long_desc,
             json.dumps(idea.categories), datetime.now().isoformat(), (datetime.now() + IDEA_EXPIRES_AFTER).isoformat(),
             idea.price)
     try:
@@ -168,7 +196,7 @@ async def post_idea(idea: IdeaPost, token: str = Header(None, convert_underscore
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ex.__dict__)
     cursor.close()
     db.commit()
-    return ":)"
+    return id
 
 
 @app.get("/", response_class=HTMLResponse)

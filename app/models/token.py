@@ -5,6 +5,7 @@ from datetime import datetime
 
 class AccessToken(BaseModel):
     user: str
+    user_id: int
     issuer: str = "creativitycrop"
     issued: datetime
     expires: datetime
