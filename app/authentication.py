@@ -49,6 +49,7 @@ class AuthService:
             # print(payload)
             token_data = AccessToken(
                 user=payload.get("user"),
+                user_id=payload.get("user_id"),
                 issuer=payload.get("issuer"),
                 issued=payload.get("issued"),
                 expires=payload.get("expires"),

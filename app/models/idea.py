@@ -7,5 +7,5 @@ class IdeaPost(BaseModel):
     title: str
     short_desc: str
     long_desc: str
-    categories: Optional[list] = None
+    categories: Optional[dict] = None
     price: decimal.Decimal
