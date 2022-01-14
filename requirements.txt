@@ -6,3 +6,4 @@ bcrypt
 passlib
 jose
 uvicorn
+stripe
