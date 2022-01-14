@@ -57,5 +57,9 @@ class AuthService:
             )
         except JWTError as ex:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail={"msg": ex.__str__(), "errno": 103})
-
+        except AttributeError:
+            raise HTTPException(status_code=status.HTTP_406_NOT_ACCEPTABLE, detail={
+                "msg": "Token cannot be null",
+                "errno": 103
+            })
         return token_data
