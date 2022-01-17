@@ -1,19 +1,23 @@
-import json
-from datetime import datetime
-import mysql.connector
+import requests
 from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from starlette import status
-from stripe.api_resources.payment_intent import PaymentIntent
+from typing import Optional
 
 from app.models.user import UserRegister, UserLogin
 from app.models.idea import IdeaPost
 from app.models.token import AccessToken
 from app.authentication import AuthService
 from app.config import *
-import hashlib
+
 import stripe
+from stripe.api_resources.payment_intent import PaymentIntent
+
+import mysql.connector
+from datetime import datetime
+import json
+import hashlib
 
 app = FastAPI()
 auth = AuthService()
@@ -144,9 +148,11 @@ async def get_idea_by_id(idea_id: str, token: str = Header(None, convert_undersc
     except mysql.connector.errors.InterfaceError as ex:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=ex.__dict__)
     cursor = db.cursor(dictionary=True)
-    query = "SELECT * FROM ideas WHERE id = %s"
+    query = "SELECT *, (SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id) AS likes FROM ideas WHERE id = %s"
     cursor.execute(query, (idea_id,))
     result = cursor.fetchone()
+    cursor.execute("SELECT category FROM ideas_categories WHERE idea_id=%s", (result["id"],))
+    result["categories"] = list(map(lambda x: x["category"], cursor.fetchall()))
     # print(result)
     cursor.close()
     if result is None:
@@ -163,17 +169,31 @@ async def get_idea_by_id(idea_id: str, token: str = Header(None, convert_undersc
     return result
 
 
-@app.get("/api/ideas/get")
-async def get_ideas(start: int = 0, end: int = 10):
+@app.get("/api/ideas/get/")
+async def get_ideas(start: int = 0, end: int = 10, categories: Optional[str] = None):
     try:
         db.ping(reconnect=True, attempts=3, delay=5)
     except mysql.connector.errors.InterfaceError as ex:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=ex.__dict__)
     cursor = db.cursor(dictionary=True)
-    query = "SELECT *, (SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id) AS likes FROM ideas " \
-            "WHERE buyer_id IS NULL ORDER BY date_publish DESC LIMIT %s, %s"
+    if categories is not None:
+        query = "SELECT *," \
+                        "(SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id) AS likes " \
+                "FROM ideas " \
+                "WHERE buyer_id IS NULL ORDER BY date_publish " \
+                "DESC LIMIT %s, %s"
+    else:
+        query = "SELECT *," \
+                        "(SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id) AS likes " \
+                "FROM ideas " \
+                "WHERE buyer_id IS NULL ORDER BY date_publish " \
+                "DESC LIMIT %s, %s"
     cursor.execute(query, (start, end))
     results = cursor.fetchall()
+    for result in results:
+        cursor.execute("SELECT category FROM ideas_categories WHERE idea_id=%s", (result["id"],))
+        result["categories"] = list(map(lambda x: x["category"], cursor.fetchall()))
+    cursor.close()
     return results
 
 
@@ -186,13 +206,14 @@ async def post_idea(idea: IdeaPost, token: str = Header(None, convert_underscore
         return ex.__dict__
     idea_id = hashlib.md5(idea.long_desc.encode()).hexdigest()
     cursor = db.cursor()
-    query = "INSERT INTO ideas(id, seller_id, title, short_desc, long_desc, categories," \
-            " date_publish, date_expiry, price) VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s)"
-    data = (idea_id, token_data.user_id, idea.title, idea.short_desc, idea.long_desc,
-            json.dumps(idea.categories), datetime.now().isoformat(), (datetime.now() + IDEA_EXPIRES_AFTER).isoformat(),
-            idea.price)
+    query = "INSERT INTO ideas(id, seller_id, title, short_desc, long_desc, " \
+            "date_publish, date_expiry, price) VALUES(%s, %s, %s, %s, %s, %s, %s, %s)"
+    data = (idea_id, token_data.user_id, idea.title, idea.short_desc, idea.long_desc, datetime.now().isoformat(),
+            (datetime.now() + IDEA_EXPIRES_AFTER).isoformat(), idea.price)
     try:
         cursor.execute(query, data)
+        for category in idea.categories:
+            cursor.execute("INSERT INTO ideas_categories(idea_id, category) VALUES(%s, %s)", (idea_id, category))
     except mysql.connector.errors.IntegrityError as ex:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ex.__dict__)
     cursor.close()
@@ -245,6 +266,7 @@ async def get_ideas_bought_by_user(token: str = Header(None, convert_underscores
             "WHERE buyer_id=%s ORDER BY date_publish DESC"
     cursor.execute(query, (token_data.user_id,))
     results = cursor.fetchall()
+    cursor.close()
     return results
 
 
@@ -260,6 +282,7 @@ async def get_ideas_bought_by_user(token: str = Header(None, convert_underscores
             "WHERE seller_id=%s ORDER BY date_publish ASC"
     cursor.execute(query, (token_data.user_id,))
     results = cursor.fetchall()
+    cursor.close()
     return results
 
 
@@ -272,12 +295,13 @@ async def create_payment(idea_id: str, token: str = Header(None, convert_undersc
     except mysql.connector.errors.InterfaceError as ex:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=ex.__dict__)
     cursor = db.cursor(dictionary=True)
-    cursor.execute("SELECT ideas.price, user.id, user.email FROM ideas, users WHERE ideas.id=%s AND users.id=%s",
+    cursor.execute("SELECT ideas.price, users.id, users.email FROM ideas, users WHERE ideas.id=%s AND users.id=%s",
                    (idea_id, token_data.user_id))
     result = cursor.fetchone()
+    cursor.close()
     intent = stripe.PaymentIntent.create(
-        amount=result["price"],
-        customer=result["id"],
+        amount=int(result["price"]),
+        # customer=result["id"],
         receipt_email=result["email"],
         currency='usd',
     )
@@ -297,6 +321,16 @@ async def delete_payment(payment_id: PaymentIntent):
 async def read_root():
     return '<script>window.location.replace("http://creativitycrop.tech");</script>'
 
+
+@app.post("/api/test")
+async def send_email():
+    print(requests.post(
+        "https://api.eu.mailgun.net/v3/app.creativitycrop.tech/messages",
+        auth=("api", "***REMOVED***"),
+        data={"from": "Excited User <maikati@app.creativitycrop.tech>",
+              "to": ["georgi.iliev533@outlook.com"],
+              "subject": "Hello",
+              "text": "Testing some Mailgun awesomness!"}))
 
 @app.on_event("shutdown")
 async def shutdown_event():
