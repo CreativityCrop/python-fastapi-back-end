@@ -9,6 +9,28 @@ PROJECT_NAME = "creativitycrop"
 VERSION = "1.0.0"
 API_PREFIX = "/api"
 
+CDN_FILES_PATH = "/var/www/cdn"
+CDN_URL = "https://cdn.creativitycrop.tech/"
+CDN_ALLOWED_CONTENT_TYPES = [
+    "text/csv",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/json",
+    "audio/mpeg",
+    "video/mp4",
+    "video/mpeg",
+    "image/png",
+    "application/pdf",
+    "application/vnd.ms-powerpoint",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.rar",
+    "image/svg+xml",
+    "text/plain",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/xml"
+]
+
 STRIPE_API_KEY = config("STRIPE_API_KEY", cast=Secret, default='sk_test_51Jx4d2Ldhfi7be41P1vPbJ4zd47yIWOii662BD'
                                                                '9HIqUK14y3N8p57jbIt6sCKHNra0U1NzkAnZeaBUjHyZjRO'
                                                                'Yg300EhrWWoMB')
