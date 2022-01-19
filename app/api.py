@@ -1,9 +1,9 @@
-import requests
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from starlette import status
 from typing import Optional
+from datetime import datetime
 
 from app.models.user import UserRegister, UserLogin
 from app.models.idea import IdeaPost
@@ -15,8 +15,7 @@ import stripe
 from stripe.api_resources.payment_intent import PaymentIntent
 
 import mysql.connector
-from datetime import datetime
-import json
+import aiofiles as aiofiles
 import hashlib
 
 app = FastAPI()
@@ -99,8 +98,6 @@ async def login_user(user: UserLogin):
     query = 'SELECT * FROM users WHERE username = %s'
     cursor.execute(query, (user.username,))
     result = cursor.fetchone()
-    user_id = result["id"]
-
     if result is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={
             "msg": "Username is wrong or nonexistent", "errno": 101
@@ -109,7 +106,7 @@ async def login_user(user: UserLogin):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail={
             "msg": "Password is wrong", "errno": 102
         })
-
+    user_id = result["id"]
     query = "UPDATE users SET date_login = %s WHERE users.username = %s;"
     cursor.execute(query, (datetime.now().isoformat(), user.username))
     access_token = auth.create_access_token(
@@ -177,17 +174,20 @@ async def get_ideas(start: int = 0, end: int = 10, categories: Optional[str] = N
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=ex.__dict__)
     cursor = db.cursor(dictionary=True)
     if categories is not None:
-        query = "SELECT *," \
-                        "(SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id) AS likes " \
+        query = "SELECT " \
+                "id, seller_id, title, short_desc, date_publish, date_expiry, price, image_id, " \
+                "(SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id) AS likes " \
                 "FROM ideas " \
-                "WHERE buyer_id IS NULL ORDER BY date_publish " \
-                "DESC LIMIT %s, %s"
+                "WHERE " \
+                "buyer_id IS NULL AND " \
+                "%s IN (SELECT category FROM ideas_categories WHERE idea_id=ideas.id) " \
+                "ORDER BY date_publish DESC LIMIT %s, %s "
     else:
-        query = "SELECT *," \
-                        "(SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id) AS likes " \
+        query = "SELECT " \
+                "id, seller_id, title, short_desc, date_publish, date_expiry, price, image_id, " \
+                "(SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id) AS likes " \
                 "FROM ideas " \
-                "WHERE buyer_id IS NULL ORDER BY date_publish " \
-                "DESC LIMIT %s, %s"
+                "WHERE buyer_id IS NULL ORDER BY date_publish DESC LIMIT %s, %s "
     cursor.execute(query, (start, end))
     results = cursor.fetchall()
     for result in results:
@@ -254,8 +254,27 @@ async def like_idea(idea_id: str, token: str = Header(None, convert_underscores=
     return likes
 
 
+@app.get("/api/account")
+async def get_account_details(token: str = Header(None, convert_underscores=False)):
+    token_data: AccessToken = auth.verify_token(token)
+    try:
+        db.ping(reconnect=True, attempts=3, delay=5)
+    except mysql.connector.errors.InterfaceError as ex:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=ex.__dict__)
+    cursor = db.cursor(dictionary=True)
+    query = "SELECT " \
+            "users.*, files.public_path AS avatar_url " \
+            "FROM users " \
+            "LEFT JOIN files ON users.avatar_id=files.id " \
+            "WHERE users.id=%s"
+    cursor.execute(query, (token_data.user_id,))
+    result = cursor.fetchone()
+    cursor.close()
+    return result
+
+
 @app.get("/api/account/ideas/bought")
-async def get_ideas_bought_by_user(token: str = Header(None, convert_underscores=False)):
+async def get_ideas_bought_by_user(start: int = 0, end: int = 5, token: str = Header(None, convert_underscores=False)):
     token_data: AccessToken = auth.verify_token(token)
     try:
         db.ping(reconnect=True, attempts=3, delay=5)
@@ -263,24 +282,25 @@ async def get_ideas_bought_by_user(token: str = Header(None, convert_underscores
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=ex.__dict__)
     cursor = db.cursor(dictionary=True)
     query = "SELECT *, ( SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id ) AS likes FROM ideas " \
-            "WHERE buyer_id=%s ORDER BY date_publish DESC"
-    cursor.execute(query, (token_data.user_id,))
+            "WHERE buyer_id=%s ORDER BY date_publish DESC LIMIT %s, %s"
+    cursor.execute(query, (token_data.user_id, start, end))
     results = cursor.fetchall()
     cursor.close()
     return results
 
 
 @app.get("/api/account/ideas/sold")
-async def get_ideas_bought_by_user(token: str = Header(None, convert_underscores=False)):
+async def get_ideas_bought_by_user(start: int = 0, end: int = 5, token: str = Header(None, convert_underscores=False)):
     token_data: AccessToken = auth.verify_token(token)
     try:
         db.ping(reconnect=True, attempts=3, delay=5)
     except mysql.connector.errors.InterfaceError as ex:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=ex.__dict__)
     cursor = db.cursor(dictionary=True)
-    query = "SELECT id, seller_id, title, price, date_publish, likes FROM ideas " \
-            "WHERE seller_id=%s ORDER BY date_publish ASC"
-    cursor.execute(query, (token_data.user_id,))
+    query = "SELECT id, seller_id, title, price, date_publish, " \
+            "( SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id ) AS likes FROM ideas " \
+            "WHERE seller_id=%s ORDER BY date_publish ASC LIMIT %s, %s"
+    cursor.execute(query, (token_data.user_id, start, end))
     results = cursor.fetchall()
     cursor.close()
     return results
@@ -289,7 +309,6 @@ async def get_ideas_bought_by_user(token: str = Header(None, convert_underscores
 @app.get("/api/payment/create")
 async def create_payment(idea_id: str, token: str = Header(None, convert_underscores=False)):
     token_data: AccessToken = auth.verify_token(token)
-
     try:
         db.ping(reconnect=True, attempts=3, delay=5)
     except mysql.connector.errors.InterfaceError as ex:
@@ -300,13 +319,14 @@ async def create_payment(idea_id: str, token: str = Header(None, convert_undersc
     result = cursor.fetchone()
     cursor.close()
     intent = stripe.PaymentIntent.create(
-        amount=int(result["price"]),
+        amount=int(result["price"]) * 100,
         # customer=result["id"],
         receipt_email=result["email"],
-        currency='usd',
+        currency="usd",
+        description=idea_id
     )
     return {
-        'clientSecret': intent['client_secret']
+        "clientSecret": intent["client_secret"]
     }
 
 
@@ -317,20 +337,27 @@ async def delete_payment(payment_id: PaymentIntent):
     )
 
 
+@app.post("/api/files/upload")
+async def create_upload_file(file: UploadFile = File(...)):
+    if file.content_type not in CDN_ALLOWED_CONTENT_TYPES:
+        raise HTTPException(status_code=406, detail="File type is not allowed for upload!")
+    temp = await file.read()
+    async with aiofiles.open(f'{CDN_FILES_PATH + "/img/" + file.filename}', "wb") as f:
+        await f.write(temp)
+    file_id = hashlib.md5(temp).hexdigest()
+    cursor = db.cursor(dictionary=True)
+    cursor.execute("INSERT INTO files(id, filename, filesize, absolute_path, public_path, content_type)"
+                   "VALUES(%s, %s, %s, %s, %s, %s)",
+                   (file_id, file.filename, file.spool_max_size, f'{CDN_FILES_PATH + "/img/" + file.filename}',
+                    f'{CDN_URL + "/img/" + file.filename}', file.content_type))
+    cursor.close()
+    return {"filename": file.filename}
+
+
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
     return '<script>window.location.replace("http://creativitycrop.tech");</script>'
 
-
-@app.post("/api/test")
-async def send_email():
-    print(requests.post(
-        "https://api.eu.mailgun.net/v3/app.creativitycrop.tech/messages",
-        auth=("api", "***REMOVED***"),
-        data={"from": "Excited User <maikati@app.creativitycrop.tech>",
-              "to": ["georgi.iliev533@outlook.com"],
-              "subject": "Hello",
-              "text": "Testing some Mailgun awesomness!"}))
 
 @app.on_event("shutdown")
 async def shutdown_event():
