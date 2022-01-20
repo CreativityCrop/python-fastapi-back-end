@@ -175,18 +175,18 @@ async def get_ideas(start: int = 0, end: int = 10, categories: Optional[str] = N
     cursor = db.cursor(dictionary=True)
     if categories is not None:
         query = "SELECT " \
-                "id, seller_id, title, short_desc, date_publish, date_expiry, price, image_id, " \
+                "ideas.id, seller_id, ideas.title, short_desc, date_publish, date_expiry, price, files.public_path, " \
                 "(SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id) AS likes " \
-                "FROM ideas " \
+                "FROM ideas LEFT JOIN files ON ideas.id=files.id" \
                 "WHERE " \
                 "buyer_id IS NULL AND " \
                 "%s IN (SELECT category FROM ideas_categories WHERE idea_id=ideas.id) " \
                 "ORDER BY date_publish DESC LIMIT %s, %s "
     else:
         query = "SELECT " \
-                "id, seller_id, title, short_desc, date_publish, date_expiry, price, image_id, " \
+                "ideas.id, seller_id, ideas.title, short_desc, date_publish, date_expiry, price, files.public_path, " \
                 "(SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id) AS likes " \
-                "FROM ideas " \
+                "FROM ideas LEFT JOIN files ON ideas.id=files.id " \
                 "WHERE buyer_id IS NULL ORDER BY date_publish DESC LIMIT %s, %s "
     cursor.execute(query, (start, end))
     results = cursor.fetchall()
@@ -216,8 +216,6 @@ async def post_idea(idea: IdeaPost, token: str = Header(None, convert_underscore
             cursor.execute("INSERT INTO ideas_categories(idea_id, category) VALUES(%s, %s)", (idea_id, category))
     except mysql.connector.errors.IntegrityError as ex:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ex.__dict__)
-    cursor.close()
-    db.commit()
     return idea_id
 
 
@@ -337,21 +335,35 @@ async def delete_payment(payment_id: PaymentIntent):
     )
 
 
+def f(x):
+    return {
+        'a': 1,
+        'b': 2,
+    }[x]
+
+
 @app.post("/api/files/upload")
-async def create_upload_file(file: UploadFile = File(...)):
-    if file.content_type not in CDN_ALLOWED_CONTENT_TYPES:
-        raise HTTPException(status_code=406, detail="File type is not allowed for upload!")
-    temp = await file.read()
-    async with aiofiles.open(f'{CDN_FILES_PATH + "/img/" + file.filename}', "wb") as f:
-        await f.write(temp)
-    file_id = hashlib.md5(temp).hexdigest()
+async def create_upload_file(idea_id: Optional[str] = None, files: list[UploadFile] = File(...), token: str = Header(None, convert_underscores=False)):
+    auth.verify_token(token)
+    # TODO: File upload part
     cursor = db.cursor(dictionary=True)
-    cursor.execute("INSERT INTO files(id, filename, filesize, absolute_path, public_path, content_type)"
-                   "VALUES(%s, %s, %s, %s, %s, %s)",
-                   (file_id, file.filename, file.spool_max_size, f'{CDN_FILES_PATH + "/img/" + file.filename}',
-                    f'{CDN_URL + "/img/" + file.filename}', file.content_type))
+    for file in files:
+        if file.content_type not in CDN_ALLOWED_CONTENT_TYPES:
+            raise HTTPException(status_code=406, detail="File type is not allowed for upload!")
+        temp = await file.read()
+        async with aiofiles.open(f'{CDN_FILES_PATH + "/img/" + file.filename}', "wb") as directory:
+            await directory.write(temp)
+        if file.filename == ("img-" + idea_id):
+            file_id = idea_id
+        else:
+            file_id = hashlib.md5(temp).hexdigest()
+        cursor.execute("INSERT INTO files(id, idea_id, name, size, absolute_path, public_path, content_type)"
+                       "VALUES(%s, %s, %s, %s, %s, %s, %s)",
+                       (file_id, idea_id, file.filename, file.spool_max_size, f'{CDN_FILES_PATH + "/img/" + file.filename}',
+                        f'{CDN_URL + "/img/" + file.filename}', file.content_type))
     cursor.close()
-    return {"filename": file.filename}
+    db.commit()
+    return
 
 
 @app.get("/", response_class=HTMLResponse)
