@@ -9,7 +9,7 @@ PROJECT_NAME = "creativitycrop"
 VERSION = "1.0.0"
 API_PREFIX = "/api"
 
-CDN_FILES_PATH = "/var/www/cdn"
+CDN_FILES_PATH = "/var/www/cdn/"
 CDN_URL = "https://cdn.creativitycrop.tech/"
 
 CDN_IMAGE_TYPES = [
@@ -45,6 +45,8 @@ CDN_ALLOWED_CONTENT_TYPES = CDN_IMAGE_TYPES + CDN_MEDIA_TYPES + CDN_DOCS_TYPES
 STRIPE_API_KEY = config("STRIPE_API_KEY", cast=Secret, default='sk_test_51Jx4d2Ldhfi7be41P1vPbJ4zd47yIWOii662BD'
                                                                '9HIqUK14y3N8p57jbIt6sCKHNra0U1NzkAnZeaBUjHyZjRO'
                                                                'Yg300EhrWWoMB')
+STRIPE_WEBHOOK_SECRET = config("STRIPE_WEBHOOK_SECRET", cast=Secret, default='whsec_B6yQ4rfFnE5SkgTf00D0DRFpzUmiTJXB')
+
 
 SUPER_USERS = config("SUPER_USERS", cast=set, default={"georgi", "zorry"})
 
