@@ -1,6 +1,6 @@
-from fastapi import FastAPI, HTTPException, Header, File, UploadFile
+from fastapi import FastAPI, HTTPException, Header, File, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from starlette import status
 from typing import Optional
 from datetime import datetime
@@ -139,7 +139,6 @@ async def get_idea_by_id(idea_id: str, token: str = Header(None, convert_undersc
             "msg": "ID validation failed, should be MD5 hash in hex format",
             "errno": 201
         })
-
     try:
         db.ping(reconnect=True, attempts=3, delay=5)
     except mysql.connector.errors.InterfaceError as ex:
@@ -183,7 +182,7 @@ async def get_ideas(start: int = 0, end: int = 10, cat: Optional[str] = None):
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=ex.__dict__)
     cursor = db.cursor(dictionary=True)
     query = "SELECT " \
-            "ideas.id, seller_id, title, short_desc, date_publish, date_expiry, price, files.public_path AS image_url, " \
+            "ideas.id, seller_id, title, short_desc, date_publish, date_expiry, price, files.public_path AS image_url,"\
             "(SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id) AS likes " \
             "FROM ideas LEFT JOIN files ON ideas.id=files.id " \
             "WHERE buyer_id IS NULL ORDER BY date_publish DESC LIMIT %s, %s "
@@ -200,6 +199,21 @@ async def get_ideas(start: int = 0, end: int = 10, cat: Optional[str] = None):
                 new_results.append(result)
         return new_results
     return results
+
+
+@app.get("/api/ideas/get-hottest")
+def get_hottest_ideas():
+    try:
+        db.ping(reconnect=True, attempts=3, delay=5)
+    except mysql.connector.errors.InterfaceError as ex:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=ex.__dict__)
+    cursor = db.cursor(dictionary=True)
+    query = "SELECT ideas.id, ideas.title, files.public_path AS image_url, " \
+            "(SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id) AS likes " \
+            "FROM ideas LEFT JOIN files ON ideas.id=files.id " \
+            "WHERE buyer_id IS NULL ORDER BY likes DESC LIMIT 5"
+    cursor.execute(query)
+    return cursor.fetchall()
 
 
 @app.post("/api/ideas/post")
@@ -322,22 +336,49 @@ async def get_ideas_bought_by_user(start: int = 0, end: int = 5, token: str = He
 @app.get("/api/payment/create")
 async def create_payment(idea_id: str, token: str = Header(None, convert_underscores=False)):
     token_data: AccessToken = auth.verify_token(token)
+    if len(idea_id) != len(hashlib.md5().hexdigest()):
+        raise HTTPException(status_code=status.HTTP_406_NOT_ACCEPTABLE, detail={
+            "msg": "ID validation failed, should be MD5 hash in hex format",
+            "errno": 201
+        })
     try:
         db.ping(reconnect=True, attempts=3, delay=5)
     except mysql.connector.errors.InterfaceError as ex:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=ex.__dict__)
     cursor = db.cursor(dictionary=True)
-    cursor.execute("SELECT ideas.price, users.id, users.email FROM ideas, users WHERE ideas.id=%s AND users.id=%s",
+    cursor.execute("SELECT ideas.price, ideas.title, ideas.buyer_id, users.id AS user_id, users.email "
+                   "FROM ideas, users "
+                   "WHERE ideas.id=%s AND users.id=%s",
                    (idea_id, token_data.user_id))
-    result = cursor.fetchone()
-    cursor.close()
+    idea = cursor.fetchone()
+    if idea is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={
+            "msg": "The idea was not found",
+            "errno": 202
+        })
+    if idea["buyer_id"] is not None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail={
+            "msg": "The idea has been already sold",
+            "errno": "MAKE A NEW ONE"
+        })
     intent = stripe.PaymentIntent.create(
-        amount=int(result["price"]) * 100,
+        amount=int(idea["price"]) * 100,
         # customer=result["id"],
-        receipt_email=result["email"],
+        receipt_email=idea["email"],
         currency="usd",
-        description=idea_id
+        description="CreativityCrop - Selling the idea: " + idea["title"],
+        metadata={
+            "idea_id": idea_id,
+            "user_id": token_data.user_id
+        }
+
     )
+    cursor.execute("INSERT INTO payments(id, amount, currency, idea_id, user_id, status) "
+                   "VALUES(%s, %s, %s, %s, %s, %s)",
+                   (intent["id"], intent["amount"], intent["currency"], idea_id, idea["user_id"], intent["status"]))
+    # Make the buyer_id -1 to stop it from appearing in the list of ideas for sale
+    cursor.execute("UPDATE ideas SET buyer_id=-1 WHERE id=%s", (idea_id,))
+    cursor.close()
     return {
         "clientSecret": intent["client_secret"]
     }
@@ -348,13 +389,63 @@ async def delete_payment(payment_id: PaymentIntent):
     stripe.PaymentIntent.cancel(
         payment_id,
     )
+    return stripe.PaymentIntent.list()
 
 
-def f(x):
-    return {
-        'a': 1,
-        'b': 2,
-    }[x]
+@app.post('/api/payment/webhook')
+async def webhook_received(request: Request):
+    sig_header = request.headers.get("stripe-signature")
+    webhook_secret = str(STRIPE_WEBHOOK_SECRET)
+    try:
+        event = stripe.Webhook.construct_event(await request.body(), sig_header, webhook_secret)
+    except ValueError as ex:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=ex.__dict__)
+    except stripe.error.SignatureVerificationError:
+        print("Signature invalid:")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"text": "Invalid signature"})
+
+    try:
+        db.ping(reconnect=True, attempts=3, delay=5)
+    except mysql.connector.errors.InterfaceError as ex:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=ex.__dict__)
+    cursor = db.cursor(dictionary=True)
+
+    if event['type'] == 'payment_intent.canceled':
+        intent = event['data']['object']
+    elif event['type'] == 'payment_intent.created':
+        intent = event['data']['object']
+    elif event['type'] == 'payment_intent.payment_failed':
+        intent = event['data']['object']
+    elif event['type'] == 'payment_intent.processing':
+        intent = event['data']['object']
+    elif event['type'] == 'payment_intent.requires_action':
+        intent = event['data']['object']
+    elif event['type'] == 'payment_intent.succeeded':
+        intent = event['data']['object']
+        cursor.execute(
+            "UPDATE payments SET amount=%s, currency=%s, status=%s WHERE id=%s",
+            (intent["amount"], intent["currency"], intent["status"], intent["id"])
+        )
+        cursor.execute(
+            "UPDATE ideas SET buyer_id=%s WHERE id=%s",
+            (intent["metadata"]["user_id"], intent["metadata"]["idea_id"])
+        )
+    else:
+        print('Unhandled event type {}'.format(event['type']))
+
+    cursor.close()
+    return {'status': 'success'}
+
+
+def get_folder_for_file(filetype):
+    if filetype in CDN_DOCS_TYPES:
+        return "docs/"
+    elif filetype in CDN_MEDIA_TYPES:
+        return "media/"
+    elif filetype in CDN_IMAGE_TYPES:
+        return "img/"
+    else:
+        raise TypeError
 
 
 @app.post("/api/files/upload")
@@ -371,7 +462,8 @@ async def upload_file(idea_id: Optional[str] = None, files: list[UploadFile] = F
         if file.content_type not in CDN_ALLOWED_CONTENT_TYPES:
             raise HTTPException(status_code=406, detail="File type is not allowed for upload!")
         temp = await file.read()
-        async with aiofiles.open(f'{CDN_FILES_PATH + "/img/" + file.filename}', "wb") as directory:
+        async with aiofiles.open(f'{CDN_FILES_PATH + get_folder_for_file(file.content_type) + file.filename}',
+                                 "wb") as directory:
             await directory.write(temp)
         if file.filename == ("img-" + idea_id):
             file_id = idea_id
@@ -401,9 +493,9 @@ async def download_file(file_id: str, token: str):
     return FileResponse(path=file["absolute_path"], filename=file["name"], media_type=file["content_type"])
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/", response_class=RedirectResponse)
 async def read_root():
-    return '<script>window.location.replace("http://creativitycrop.tech");</script>'
+    return "https://creativitycrop.tech"
 
 
 @app.on_event("shutdown")
