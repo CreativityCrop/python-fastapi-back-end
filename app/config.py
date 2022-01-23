@@ -29,7 +29,7 @@ CDN_DOCS_TYPES = [
     "text/csv",
     "application/pdf",
     "application/json",
-    "application/xml"
+    "application/xml",
     "application/msword",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "application/vnd.ms-powerpoint",

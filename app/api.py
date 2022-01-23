@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Header, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
 from starlette import status
 from typing import Optional
 from datetime import datetime
@@ -145,13 +145,13 @@ async def get_idea_by_id(idea_id: str, token: str = Header(None, convert_undersc
     except mysql.connector.errors.InterfaceError as ex:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=ex.__dict__)
     cursor = db.cursor(dictionary=True)
-    query = "SELECT *, (SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id) AS likes FROM ideas WHERE id = %s"
+    query = "SELECT ideas.*, " \
+            "(SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id) AS likes, " \
+            "files.public_path AS image_url " \
+            "FROM ideas LEFT JOIN files ON ideas.id=files.id " \
+            "WHERE ideas.id = %s"
     cursor.execute(query, (idea_id,))
     result = cursor.fetchone()
-    cursor.execute("SELECT category FROM ideas_categories WHERE idea_id=%s", (result["id"],))
-    result["categories"] = list(map(lambda x: x["category"], cursor.fetchall()))
-    # print(result)
-    cursor.close()
     if result is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={
             "msg": "The idea was not found",
@@ -162,38 +162,43 @@ async def get_idea_by_id(idea_id: str, token: str = Header(None, convert_undersc
             "msg": "The idea is not owned by the authenticated user",
             "errno": 203
         })
+    cursor.execute("SELECT category FROM ideas_categories WHERE idea_id=%s", (result["id"],))
+    result["categories"] = list(map(lambda x: x["category"], cursor.fetchall()))
+    if result["buyer_id"] != access_token.user_id:
+        del result["long_desc"]
+    else:
+        cursor.execute("SELECT * FROM files WHERE idea_id=%s AND idea_id!=id", (result["id"],))
+        result["files"] = list(cursor.fetchall())
+    # print(result)
+    cursor.close()
 
     return result
 
 
-@app.get("/api/ideas/get/")
-async def get_ideas(start: int = 0, end: int = 10, categories: Optional[str] = None):
+@app.get("/api/ideas/get")
+async def get_ideas(start: int = 0, end: int = 10, cat: Optional[str] = None):
     try:
         db.ping(reconnect=True, attempts=3, delay=5)
     except mysql.connector.errors.InterfaceError as ex:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=ex.__dict__)
     cursor = db.cursor(dictionary=True)
-    if categories is not None:
-        query = "SELECT " \
-                "ideas.id, seller_id, ideas.title, short_desc, date_publish, date_expiry, price, files.public_path, " \
-                "(SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id) AS likes " \
-                "FROM ideas LEFT JOIN files ON ideas.id=files.id" \
-                "WHERE " \
-                "buyer_id IS NULL AND " \
-                "%s IN (SELECT category FROM ideas_categories WHERE idea_id=ideas.id) " \
-                "ORDER BY date_publish DESC LIMIT %s, %s "
-    else:
-        query = "SELECT " \
-                "ideas.id, seller_id, ideas.title, short_desc, date_publish, date_expiry, price, files.public_path, " \
-                "(SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id) AS likes " \
-                "FROM ideas LEFT JOIN files ON ideas.id=files.id " \
-                "WHERE buyer_id IS NULL ORDER BY date_publish DESC LIMIT %s, %s "
+    query = "SELECT " \
+            "ideas.id, seller_id, title, short_desc, date_publish, date_expiry, price, files.public_path AS image_url, " \
+            "(SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id) AS likes " \
+            "FROM ideas LEFT JOIN files ON ideas.id=files.id " \
+            "WHERE buyer_id IS NULL ORDER BY date_publish DESC LIMIT %s, %s "
     cursor.execute(query, (start, end))
     results = cursor.fetchall()
     for result in results:
         cursor.execute("SELECT category FROM ideas_categories WHERE idea_id=%s", (result["id"],))
         result["categories"] = list(map(lambda x: x["category"], cursor.fetchall()))
     cursor.close()
+    if cat is not None:
+        new_results = list()
+        for result in results:
+            if cat in result["categories"]:
+                new_results.append(result)
+        return new_results
     return results
 
 
@@ -279,10 +284,18 @@ async def get_ideas_bought_by_user(start: int = 0, end: int = 5, token: str = He
     except mysql.connector.errors.InterfaceError as ex:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=ex.__dict__)
     cursor = db.cursor(dictionary=True)
-    query = "SELECT *, ( SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id ) AS likes FROM ideas " \
+    query = "SELECT *, " \
+            "files.public_path AS image_url, " \
+            "( SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id ) AS likes FROM ideas " \
+            "LEFT JOIN files ON ideas.id=files.id " \
             "WHERE buyer_id=%s ORDER BY date_publish DESC LIMIT %s, %s"
     cursor.execute(query, (token_data.user_id, start, end))
     results = cursor.fetchall()
+    for result in results:
+        cursor.execute("SELECT category FROM ideas_categories WHERE idea_id=%s", (result["id"],))
+        result["categories"] = list(map(lambda x: x["category"], cursor.fetchall()))
+        cursor.execute("SELECT * FROM files WHERE idea_id=%s AND idea_id!=id", (result["id"],))
+        result["files"] = list(cursor.fetchall())
     cursor.close()
     return results
 
@@ -295,9 +308,11 @@ async def get_ideas_bought_by_user(start: int = 0, end: int = 5, token: str = He
     except mysql.connector.errors.InterfaceError as ex:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=ex.__dict__)
     cursor = db.cursor(dictionary=True)
-    query = "SELECT id, seller_id, title, price, date_publish, " \
+    query = "SELECT ideas.id, seller_id, title, price, date_publish, " \
+            "files.public_path AS image_url, " \
             "( SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id ) AS likes FROM ideas " \
-            "WHERE seller_id=%s ORDER BY date_publish ASC LIMIT %s, %s"
+            "LEFT JOIN files ON ideas.id=files.id " \
+            "WHERE seller_id=%s AND buyer_id IS NOT NULL ORDER BY date_publish ASC LIMIT %s, %s"
     cursor.execute(query, (token_data.user_id, start, end))
     results = cursor.fetchall()
     cursor.close()
@@ -343,9 +358,14 @@ def f(x):
 
 
 @app.post("/api/files/upload")
-async def create_upload_file(idea_id: Optional[str] = None, files: list[UploadFile] = File(...), token: str = Header(None, convert_underscores=False)):
+async def upload_file(idea_id: Optional[str] = None, files: list[UploadFile] = File(...),
+                      token: str = Header(None, convert_underscores=False)):
     auth.verify_token(token)
     # TODO: File upload part
+    try:
+        db.ping(reconnect=True, attempts=3, delay=5)
+    except mysql.connector.errors.InterfaceError as ex:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=ex.__dict__)
     cursor = db.cursor(dictionary=True)
     for file in files:
         if file.content_type not in CDN_ALLOWED_CONTENT_TYPES:
@@ -359,11 +379,26 @@ async def create_upload_file(idea_id: Optional[str] = None, files: list[UploadFi
             file_id = hashlib.md5(temp).hexdigest()
         cursor.execute("INSERT INTO files(id, idea_id, name, size, absolute_path, public_path, content_type)"
                        "VALUES(%s, %s, %s, %s, %s, %s, %s)",
-                       (file_id, idea_id, file.filename, file.spool_max_size, f'{CDN_FILES_PATH + "/img/" + file.filename}',
+                       (file_id, idea_id, file.filename, file.spool_max_size,
+                        f'{CDN_FILES_PATH + "/img/" + file.filename}',
                         f'{CDN_URL + "/img/" + file.filename}', file.content_type))
     cursor.close()
     db.commit()
     return
+
+
+@app.get("/api/files/download")
+async def download_file(file_id: str, token: str):
+    auth.verify_token(token)
+    try:
+        db.ping(reconnect=True, attempts=3, delay=5)
+    except mysql.connector.errors.InterfaceError as ex:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=ex.__dict__)
+    cursor = db.cursor(dictionary=True)
+    cursor.execute("SELECT * FROM files WHERE id=%s", (file_id,))
+    file = cursor.fetchone()
+    cursor.close()
+    return FileResponse(path=file["absolute_path"], filename=file["name"], media_type=file["content_type"])
 
 
 @app.get("/", response_class=HTMLResponse)
