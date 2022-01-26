@@ -56,6 +56,8 @@ DB_USER = 'creativity_crop'
 DB_PASS = 'qO4n3BPtA4MgStJW'
 DB_NAME = 'creativity_crop'
 
+DB_CLEANUP_INTERVAL = config("DB_CLEANUP_INTERVAL", default=timedelta(minutes=5))
+
 IDEA_EXPIRES_AFTER = config("IDEA_EXPIRES_AFTER", default=timedelta(days=31))
 
 # JWT creationg properties
