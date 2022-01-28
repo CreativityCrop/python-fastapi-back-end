@@ -1,3 +1,5 @@
+import json
+
 from fastapi import FastAPI, HTTPException, Header, File, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
@@ -5,6 +7,7 @@ from starlette import status
 from typing import Optional
 from datetime import datetime
 import threading
+import requests
 
 from app.models.user import UserRegister, UserLogin
 from app.models.idea import IdeaPost
@@ -71,7 +74,7 @@ async def register_user(user: UserRegister):
     query = "INSERT INTO users(first_name, last_name, email, username, salt, pass_hash, date_register) " \
             "VALUES(%s, %s, %s, %s, %s, %s, %s)"
     data = (user.first_name, user.last_name, user.email, user.username,
-            salt, auth.hash_password(user.pass_hash, salt), datetime.now().isoformat(), user.username)
+            salt, auth.hash_password(user.pass_hash, salt), datetime.now().isoformat())
     try:
         cursor.execute(query, data)
     except mysql.connector.errors.IntegrityError as ex:
@@ -267,7 +270,6 @@ async def get_ideas(page: Optional[int] = 0, cat: Optional[str] = "%"):
         ideas_left = ideas_count - (page * 10 + len(results))
 
     cursor.close()
-    print(ideas_left)
 
     return {
         "countLeft": ideas_left,
@@ -599,6 +601,34 @@ async def download_file(file_id: str, token: str):
     cursor.close()
 
     return FileResponse(path=file["absolute_path"], filename=file["name"], media_type=file["content_type"])
+
+
+@app.get("/api/account/forgotten-password")
+async def reset_password(token: str = Header(None, convert_underscores=False)):
+    token_data = auth.verify_token(token)
+
+    is_db_up()
+    cursor = db.cursor(dictionary=True)
+    cursor.execute("SELECT first_name, last_name, username, email FROM users WHERE id=%s", (token_data.user_id,))
+    user = cursor.fetchone()
+
+    password_reset_token = ""
+    requests.post(
+        "https://api.eu.mailgun.net/v3/app.creativitycrop.tech/messages",
+        auth=("api", str(MAILGUN_API_KEY)),
+        data={
+            "from": "Friendly Bot from CreativityCrop <no-reply@app.creativitycrop.tech>",
+            "to": [user["email"], "test-4i51cm213@srv1.mail-tester.com"],
+            "subject": "CreativityCrop - Account Password Recovery  ",
+            "template": "password-recovery",
+            'h:X-Mailgun-Variables': json.dumps({
+                "user_name": user["first_name"],
+                "password_token": password_reset_token,
+                "current_year": datetime.now().year
+            })
+        }
+    )
+    return ':)'
 
 
 @app.get("/", response_class=RedirectResponse)

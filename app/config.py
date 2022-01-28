@@ -47,6 +47,7 @@ STRIPE_API_KEY = config("STRIPE_API_KEY", cast=Secret, default='sk_test_51Jx4d2L
                                                                'Yg300EhrWWoMB')
 STRIPE_WEBHOOK_SECRET = config("STRIPE_WEBHOOK_SECRET", cast=Secret, default='whsec_B6yQ4rfFnE5SkgTf00D0DRFpzUmiTJXB')
 
+MAILGUN_API_KEY = config("MAILGUN_API_KEY", cast=Secret, default='1ee6e3467a7a34b28f3c83ddd25276a9-ef80054a-64608b0b')
 
 SUPER_USERS = config("SUPER_USERS", cast=set, default={"georgi", "zorry"})
 
