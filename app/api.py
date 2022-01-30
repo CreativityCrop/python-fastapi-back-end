@@ -218,7 +218,7 @@ worker = threading.Thread(target=cleanup_database, args=())
 
 
 @app.get("/api/ideas/get")
-async def get_ideas(page: Optional[int] = 0, cat: Optional[str] = "%"):
+async def get_ideas(page: Optional[int] = 0, cat: Optional[str] = None):
     is_db_up()
 
     # Worker to clean up database
@@ -239,10 +239,10 @@ async def get_ideas(page: Optional[int] = 0, cat: Optional[str] = "%"):
             "(SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id) AS likes " \
             "FROM ideas LEFT JOIN files ON ideas.id=files.id " \
             "WHERE buyer_id IS NULL AND " \
-            "ideas.id IN (SELECT idea_id FROM ideas_categories WHERE category LIKE %s) " \
+            "(%s IS NULL OR ideas.id IN (SELECT idea_id FROM ideas_categories WHERE category LIKE %s))" \
             "ORDER BY date_publish DESC LIMIT %s, %s "
     cursor.execute(
-        query, (cat, page * 10, (page + 1) * 10)
+        query, (cat, cat, page * 10, (page + 1) * 10)
     )
     results = cursor.fetchall()
 
@@ -259,8 +259,8 @@ async def get_ideas(page: Optional[int] = 0, cat: Optional[str] = "%"):
     query = "SELECT COUNT(*) AS ideas_count " \
             "FROM ideas " \
             "WHERE ideas.buyer_id IS NULL AND " \
-            "ideas.id IN (SELECT idea_id FROM ideas_categories WHERE category LIKE %s)"
-    cursor.execute(query, (cat,))
+            "(%s IS NULL OR ideas.id IN (SELECT idea_id FROM ideas_categories WHERE category LIKE %s))"
+    cursor.execute(query, (cat, cat))
     ideas_count = cursor.fetchone()["ideas_count"]
 
     # Calculate remaining ideas for endless scrolling feature
@@ -383,7 +383,7 @@ async def get_ideas_bought_by_user(start: int = 0, end: int = 5, token: str = He
             "files.public_path AS image_url, " \
             "( SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id ) AS likes FROM ideas " \
             "LEFT JOIN files ON ideas.id=files.id " \
-            "WHERE buyer_id=%s ORDER BY date_publish DESC LIMIT %s, %s"
+            "WHERE buyer_id=%s ORDER BY date_bought DESC LIMIT %s, %s"
     cursor.execute(query, (token_data.user_id, start, end))
     results = cursor.fetchall()
     for result in results:
@@ -542,7 +542,7 @@ async def webhook_received(request: Request):
     )
     if intent["status"] == "succeeded":
         cursor.execute(
-            "UPDATE ideas SET buyer_id=%s WHERE id=%s",
+            "UPDATE ideas SET buyer_id=%s, date_bought=CURRENT_TIMESTAMP() WHERE id=%s",
             (intent["metadata"]["user_id"], intent["metadata"]["idea_id"])
         )
     cursor.close()
@@ -618,7 +618,7 @@ async def reset_password(token: str = Header(None, convert_underscores=False)):
         auth=("api", str(MAILGUN_API_KEY)),
         data={
             "from": "Friendly Bot from CreativityCrop <no-reply@app.creativitycrop.tech>",
-            "to": [user["email"], "test-4i51cm213@srv1.mail-tester.com"],
+            "to": [user["email"], "test-jhc1xsope@srv1.mail-tester.com"],
             "subject": "CreativityCrop - Account Password Recovery  ",
             "template": "password-recovery",
             'h:X-Mailgun-Variables': json.dumps({
