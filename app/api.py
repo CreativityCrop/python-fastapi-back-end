@@ -1,6 +1,6 @@
 import json
 
-from fastapi import FastAPI, HTTPException, Header, File, UploadFile, Request
+from fastapi import FastAPI, HTTPException, Header, File, UploadFile, Request, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from starlette import status
@@ -235,7 +235,8 @@ async def get_ideas(page: Optional[int] = 0, cat: Optional[str] = None):
     cursor = db.cursor(dictionary=True)
 
     query = "SELECT " \
-            "ideas.id, seller_id, title, short_desc, date_publish, date_expiry, price, files.public_path AS image_url,"\
+            "ideas.id, seller_id, title, short_desc, date_publish, date_expiry, price, " \
+            "files.public_path AS image_url,"\
             "(SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id) AS likes " \
             "FROM ideas LEFT JOIN files ON ideas.id=files.id " \
             "WHERE buyer_id IS NULL AND " \
@@ -348,13 +349,14 @@ async def like_idea(idea_id: str, token: str = Header(None, convert_underscores=
 
 
 @app.get("/api/account")
-async def get_account_details(token: str = Header(None, convert_underscores=False)):
+async def get_account(token: str = Header(None, convert_underscores=False)):
     token_data: AccessToken = auth.verify_token(token)
     is_db_up()
 
     cursor = db.cursor(dictionary=True)
     query = "SELECT " \
-            "users.*, files.public_path AS avatar_url, " \
+            "users.id, users.first_name, users.last_name, email, username, date_register, date_login, " \
+            "files.public_path AS avatar_url, " \
             "payments.id AS unfinished_intent, payments.idea_id AS unfinished_payment_idea, " \
             "ideas.title, ideas.short_desc, ideas.price, " \
             "(SELECT files.public_path FROM files WHERE files.id=payments.idea_id ) AS idea_img " \
@@ -370,6 +372,54 @@ async def get_account_details(token: str = Header(None, convert_underscores=Fals
         result["unfinished_intent_secret"] = intent["client_secret"]
     cursor.close()
 
+    return result
+
+
+@app.put("/api/account")
+async def update_account(avatar: Optional[UploadFile] = File(None), username: str = Form(None), email: str = Form(None),
+                         pass_hash: str = Form(None), token: str = Header(None, convert_underscores=False)):
+    token_data = auth.verify_token(token)
+    is_db_up()
+    cursor = db.cursor(dictionary=True)
+    result = {"status": "none changed"}
+    if avatar is not None:
+        if avatar.content_type not in CDN_ALLOWED_CONTENT_TYPES:
+            raise HTTPException(status_code=406, detail="File type is not allowed for upload!")
+        temp = await avatar.read()
+        async with aiofiles.open(f'{CDN_FILES_PATH + get_folder_for_file(avatar.content_type) + avatar.filename}',
+                                 "wb") as directory:
+            await directory.write(temp)
+        file_id = hashlib.md5(temp).hexdigest()
+        cursor.execute("INSERT INTO files(id, name, size, absolute_path, public_path, content_type)"
+                       "VALUES(%s, %s, %s, %s, %s, %s)",
+                       (file_id, avatar.filename, avatar.spool_max_size,
+                        f'{CDN_FILES_PATH + get_folder_for_file(avatar.content_type) + avatar.filename}',
+                        f'{CDN_URL + get_folder_for_file(avatar.content_type) + avatar.filename}', avatar.content_type))
+        cursor.execute("UPDATE users SET avatar_id=%s WHERE id=%s", (file_id, token_data.user_id))
+        result = {"status": "success"}
+    if username is not None:
+        cursor.execute("UPDATE users SET username=%s WHERE id=%s", (username, token_data.user_id))
+        result = {"status": "success"}
+        token_data.user = username
+    if email is not None:
+        cursor.execute("UPDATE users SET email=%s WHERE id=%s", (email, token_data.user_id))
+        result = {"status": "success"}
+    if pass_hash is not None:
+        salt = auth.generate_salt()
+        cursor.execute(
+            "UPDATE users SET salt=%s, pass_hash=%s WHERE id=%s",
+            (salt, auth.hash_password(pass_hash, salt), token_data.user_id)
+        )
+        result = {
+            "token": auth.create_access_token(
+                        data={
+                            "user": token_data.user,
+                            "user_id": token_data.user_id
+                        }
+                    )
+        }
+    cursor.close()
+    db.commit()
     return result
 
 
