@@ -192,6 +192,7 @@ def cleanup_database():
     worker_next_run = datetime.now() + DB_CLEANUP_INTERVAL
     print("Starting DB cleanup process")
 
+    # New db connection is needed to allow parallel execution
     second_db = mysql.connector.connect(
         host=DB_HOST,
         user=DB_USER,
@@ -200,15 +201,21 @@ def cleanup_database():
     )
     second_db.autocommit = True
     cursor = second_db.cursor(dictionary=True)
+    # Find payments that did not go through and the time is up
     cursor.execute("SELECT * FROM payments "
                    "WHERE status!='succeeded' AND date < DATE_SUB(CURRENT_TIMESTAMP, INTERVAL 10 MINUTE)")
     payments = cursor.fetchall()
+    # Remove buy lock from ideas and allow them to be on the marketplace
     for payment in payments:
         cursor.execute("UPDATE ideas SET buyer_id = NULL WHERE id=%s", (payment["idea_id"],))
         stripe.PaymentIntent.cancel(
             stripe.PaymentIntent(payment["id"])
         )
         cursor.execute("DELETE FROM payments WHERE id = %s", (payment["id"],))
+    # Delete old categories and likes from ideas that were deleted
+    cursor.execute("DELETE FROM ideas_categories WHERE idea_id NOT IN (SELECT id FROM ideas)")
+    cursor.execute("DELETE FROM ideas_likes WHERE idea_id NOT IN (SELECT id FROM ideas)")
+    # Close cursor and db everything is complete!
     cursor.close()
     second_db.close()
     print("DB cleaning process is completed!")
@@ -309,6 +316,9 @@ async def post_idea(idea: IdeaPost, token: str = Header(None, convert_underscore
             cursor.execute("INSERT INTO ideas_categories(idea_id, category) VALUES(%s, %s)", (idea_id, category))
     except mysql.connector.errors.IntegrityError as ex:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ex.__dict__)
+    cursor.execute("INSERT INTO payouts(idea_id, user_id) VALUES(%s, %s)", (idea_id, token_data.user_id))
+
+    cursor.close()
     return idea_id
 
 
@@ -363,6 +373,7 @@ async def get_account(token: str = Header(None, convert_underscores=False)):
             "FROM users " \
             "LEFT JOIN files ON users.avatar_id=files.id " \
             "LEFT JOIN payments ON users.id=payments.user_id AND payments.status != 'succeeded' " \
+            "AND payments.date > DATE_SUB(CURRENT_TIMESTAMP, INTERVAL 10 MINUTE)" \
             "LEFT JOIN ideas ON ideas.id=payments.idea_Id " \
             "WHERE users.id=%s"
     cursor.execute(query, (token_data.user_id,))
@@ -424,49 +435,101 @@ async def update_account(avatar: Optional[UploadFile] = File(None), username: st
 
 
 @app.get("/api/account/ideas/bought")
-async def get_ideas_bought_by_user(start: int = 0, end: int = 5, token: str = Header(None, convert_underscores=False)):
+async def get_ideas_bought_by_user(page: Optional[int] = 0, token: str = Header(None, convert_underscores=False)):
+    load_count = 5
     token_data: AccessToken = auth.verify_token(token)
     is_db_up()
 
     cursor = db.cursor(dictionary=True)
     query = "SELECT ideas.*, " \
             "files.public_path AS image_url, " \
-            "( SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id ) AS likes FROM ideas " \
+            "( SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id ) AS likes " \
+            "FROM ideas " \
             "LEFT JOIN files ON ideas.id=files.id " \
             "WHERE buyer_id=%s ORDER BY date_bought DESC LIMIT %s, %s"
-    cursor.execute(query, (token_data.user_id, start, end))
+    cursor.execute(query, (token_data.user_id, page * load_count, (page + 1) * load_count))
     results = cursor.fetchall()
     for result in results:
         cursor.execute("SELECT category FROM ideas_categories WHERE idea_id=%s", (result["id"],))
         result["categories"] = list(map(lambda x: x["category"], cursor.fetchall()))
         cursor.execute("SELECT * FROM files WHERE idea_id=%s AND idea_id!=id", (result["id"],))
         result["files"] = list(cursor.fetchall())
+
+    # Find the number of ideas matching the criteria
+    query = "SELECT COUNT(*) AS ideas_count " \
+            "FROM ideas " \
+            "WHERE buyer_id=%s"
+    cursor.execute(query, (token_data.user_id,))
+    ideas_count = cursor.fetchone()["ideas_count"]
+
+    # Calculate remaining ideas for endless scrolling feature
+    if page == 0:
+        ideas_left = ideas_count - len(results)
+    else:
+        ideas_left = ideas_count - (page * load_count + len(results))
+
     cursor.close()
 
-    return results
+    return {
+        "countLeft": ideas_left,
+        "ideas": results
+    }
 
 
 @app.get("/api/account/ideas/sold")
-async def get_ideas_bought_by_user(start: int = 0, end: int = 5, token: str = Header(None, convert_underscores=False)):
+async def get_ideas_bought_by_user(page: Optional[int] = 0, token: str = Header(None, convert_underscores=False)):
+    load_count = 5
     token_data: AccessToken = auth.verify_token(token)
     is_db_up()
 
     cursor = db.cursor(dictionary=True)
     query = "SELECT ideas.id, seller_id, title, price, date_publish, " \
             "files.public_path AS image_url, " \
-            "( SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id ) AS likes FROM ideas " \
+            "( SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id ) AS likes, " \
+            "( SELECT status FROM payouts WHERE idea_id=ideas.id ) AS payout_status " \
+            "FROM ideas " \
             "LEFT JOIN files ON ideas.id=files.id " \
             "WHERE seller_id=%s AND buyer_id IS NOT NULL ORDER BY date_publish ASC LIMIT %s, %s"
-    cursor.execute(query, (token_data.user_id, start, end))
+    cursor.execute(query, (token_data.user_id, page * load_count, (page + 1) * load_count))
     results = cursor.fetchall()
+
+    # Find the number of ideas matching the criteria
+    query = "SELECT COUNT(*) AS ideas_count " \
+            "FROM ideas " \
+            "WHERE seller_id=%s AND buyer_id IS NOT NULL"
+    cursor.execute(query, (token_data.user_id,))
+    ideas_count = cursor.fetchone()["ideas_count"]
+
+    # Calculate remaining ideas for endless scrolling feature
+    if page == 0:
+        ideas_left = ideas_count - len(results)
+    else:
+        ideas_left = ideas_count - (page * load_count + len(results))
+
     cursor.close()
 
-    return results
+    return {
+        "countLeft": ideas_left,
+        "ideas": results
+    }
+
+
+@app.put("/api/account/request-payout")
+async def request_payout(idea_id: str, token: str = Header(None, convert_underscores=False)):
+    auth.verify_token(token)
+    is_db_up()
+    cursor = db.cursor(dictionary=True)
+
+    cursor.execute("UPDATE payouts SET status='processing', date=CURRENT_TIMESTAMP() WHERE idea_id=%s", (idea_id,))
+
+    cursor.close()
+
+    return {"payoutStatus": "processing"}
 
 
 @app.get("/api/payment/create")
 async def create_payment(idea_id: str, token: str = Header(None, convert_underscores=False)):
-    token_data: AccessToken = auth.verify_token(token)
+    token_data = auth.verify_token(token)
     # Check if idea id is valid MD5 hash
     if len(idea_id) != len(hashlib.md5().hexdigest()):
         raise HTTPException(status_code=status.HTTP_406_NOT_ACCEPTABLE, detail={
@@ -625,7 +688,7 @@ async def upload_file(idea_id: Optional[str] = None, files: list[UploadFile] = F
         async with aiofiles.open(f'{CDN_FILES_PATH + get_folder_for_file(file.content_type) + file.filename}',
                                  "wb") as directory:
             await directory.write(temp)
-        if file.filename == ("img-" + idea_id):
+        if file.filename.startswith("title-"):
             file_id = idea_id
         else:
             file_id = hashlib.md5(temp).hexdigest()
