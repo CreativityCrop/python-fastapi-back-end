@@ -61,14 +61,25 @@ DB_CLEANUP_INTERVAL = config("DB_CLEANUP_INTERVAL", default=timedelta(minutes=5)
 
 IDEA_EXPIRES_AFTER = config("IDEA_EXPIRES_AFTER", default=timedelta(days=31))
 
-# JWT creationg properties
+# JWT creation properties
 JWT_SECRET_KEY = config("JWT_SECRET_KEY", cast=Secret,
                         default="7414c6300dee0ca7e6dfac035501b5a20153292b0d70052d9383d360acdaf11d")
+
+JWT_PASSWORD_RESET_SECRET_KEY = config("JWT_PASSWORD_RESET_SECRET_KEY", cast=Secret,
+                                       default="0ddf5597e02d981f8803c4cc11f015a4e52679d706edb29b595d9e466def5bcf")
+
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES = config(
     "JWT_ACCESS_TOKEN_EXPIRE_MINUTES",
     cast=int,
     default=60  # one hour
 )
+
+JWT_PASSWORD_RESET_EXPIRE_MINUTES = config(
+    "JWT_PASSWORD_RESET_EXPIRE_MINUTES",
+    cast=int,
+    default=5  # one hour
+)
+
 JWT_ALGORITHM = config("JWT_ALGORITHM", cast=str, default="HS256")
 JWT_AUDIENCE = config("JWT_AUDIENCE", cast=str, default="creativitycrop")
 JWT_TOKEN_PREFIX = config("JWT_TOKEN_PREFIX", cast=str, default="Bearer")

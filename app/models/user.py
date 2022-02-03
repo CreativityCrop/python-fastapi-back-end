@@ -28,8 +28,12 @@ class UserLogin(BaseModel):
     pass_hash: str
 
 
+class UserPasswordReset(BaseModel):
+    email: EmailStr
+
+
 class UserPasswordUpdate(BaseModel):
-    name: str
+    pass_hash: str
 
 
 class Token(BaseModel):

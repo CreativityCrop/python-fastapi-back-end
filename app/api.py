@@ -1,18 +1,15 @@
-import json
-
 from fastapi import FastAPI, HTTPException, Header, File, UploadFile, Request, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from starlette import status
-from typing import Optional
-from datetime import datetime
 import threading
 import requests
+import json
 
-from app.models.user import UserRegister, UserLogin
+from app.models.user import *
 from app.models.idea import IdeaPost
-from app.models.token import AccessToken
-from app.authentication import AuthService
+from app.models.token import AccessToken, PasswordResetToken
+import app.authentication as auth
 from app.config import *
 
 import stripe
@@ -22,7 +19,6 @@ import aiofiles as aiofiles
 import hashlib
 
 app = FastAPI()
-auth = AuthService()
 stripe.api_key = str(STRIPE_API_KEY)
 
 # Origins for CORS
@@ -30,7 +26,8 @@ origins = [
     "http://localhost:3000",
     "localhost:3000",
     "http://78.128.16.152:3000",
-    "78.128.16.152:3000"
+    "78.128.16.152:3000",
+    "http://creativitycrop.tech"
 ]
 
 app.add_middleware(
@@ -136,12 +133,12 @@ async def login_user(user: UserLogin):
 
 @app.get("/api/auth/verify")
 def verify_token(token: str = Header(None, convert_underscores=False)):
-    return auth.verify_token(token)
+    return auth.verify_access_token(token)
 
 
 @app.get("/api/ideas/get/{idea_id}")
 async def get_idea_by_id(idea_id: str, token: str = Header(None, convert_underscores=False)):
-    access_token = auth.verify_token(token)
+    access_token = auth.verify_access_token(token)
     # This checks if idea id is in the right format, i.e. MD5 hash
     if len(idea_id) != len(hashlib.md5().hexdigest()):
         raise HTTPException(status_code=status.HTTP_406_NOT_ACCEPTABLE, detail={
@@ -301,7 +298,7 @@ def get_hottest_ideas():
 
 @app.post("/api/ideas/post")
 async def post_idea(idea: IdeaPost, token: str = Header(None, convert_underscores=False)):
-    token_data: AccessToken = auth.verify_token(token)
+    token_data: AccessToken = auth.verify_access_token(token)
     is_db_up()
 
     idea_id = hashlib.md5(idea.long_desc.encode()).hexdigest()
@@ -324,7 +321,7 @@ async def post_idea(idea: IdeaPost, token: str = Header(None, convert_underscore
 
 @app.put("/api/ideas/like")
 async def like_idea(idea_id: str, token: str = Header(None, convert_underscores=False)):
-    token_data = auth.verify_token(token)
+    token_data = auth.verify_access_token(token)
 
     # This checks if idea id is in the right format, i.e. MD5 hash
     if len(idea_id) != len(hashlib.md5().hexdigest()):
@@ -360,7 +357,7 @@ async def like_idea(idea_id: str, token: str = Header(None, convert_underscores=
 
 @app.get("/api/account")
 async def get_account(token: str = Header(None, convert_underscores=False)):
-    token_data: AccessToken = auth.verify_token(token)
+    token_data: AccessToken = auth.verify_access_token(token)
     is_db_up()
 
     cursor = db.cursor(dictionary=True)
@@ -389,7 +386,7 @@ async def get_account(token: str = Header(None, convert_underscores=False)):
 @app.put("/api/account")
 async def update_account(avatar: Optional[UploadFile] = File(None), username: str = Form(None), email: str = Form(None),
                          pass_hash: str = Form(None), token: str = Header(None, convert_underscores=False)):
-    token_data = auth.verify_token(token)
+    token_data = auth.verify_access_token(token)
     is_db_up()
     cursor = db.cursor(dictionary=True)
     result = {"status": "none changed"}
@@ -437,7 +434,7 @@ async def update_account(avatar: Optional[UploadFile] = File(None), username: st
 @app.get("/api/account/ideas/bought")
 async def get_ideas_bought_by_user(page: Optional[int] = 0, token: str = Header(None, convert_underscores=False)):
     load_count = 5
-    token_data: AccessToken = auth.verify_token(token)
+    token_data: AccessToken = auth.verify_access_token(token)
     is_db_up()
 
     cursor = db.cursor(dictionary=True)
@@ -479,7 +476,7 @@ async def get_ideas_bought_by_user(page: Optional[int] = 0, token: str = Header(
 @app.get("/api/account/ideas/sold")
 async def get_ideas_bought_by_user(page: Optional[int] = 0, token: str = Header(None, convert_underscores=False)):
     load_count = 5
-    token_data: AccessToken = auth.verify_token(token)
+    token_data: AccessToken = auth.verify_access_token(token)
     is_db_up()
 
     cursor = db.cursor(dictionary=True)
@@ -489,14 +486,15 @@ async def get_ideas_bought_by_user(page: Optional[int] = 0, token: str = Header(
             "( SELECT status FROM payouts WHERE idea_id=ideas.id ) AS payout_status " \
             "FROM ideas " \
             "LEFT JOIN files ON ideas.id=files.id " \
-            "WHERE seller_id=%s AND buyer_id IS NOT NULL ORDER BY date_publish ASC LIMIT %s, %s"
+            "WHERE seller_id=%s AND buyer_id IS NOT NULL AND buyer_id != -1 " \
+            "ORDER BY date_publish ASC LIMIT %s, %s"
     cursor.execute(query, (token_data.user_id, page * load_count, (page + 1) * load_count))
     results = cursor.fetchall()
 
     # Find the number of ideas matching the criteria
     query = "SELECT COUNT(*) AS ideas_count " \
             "FROM ideas " \
-            "WHERE seller_id=%s AND buyer_id IS NOT NULL"
+            "WHERE seller_id=%s AND buyer_id IS NOT NULL AND buyer_id != -1"
     cursor.execute(query, (token_data.user_id,))
     ideas_count = cursor.fetchone()["ideas_count"]
 
@@ -516,7 +514,7 @@ async def get_ideas_bought_by_user(page: Optional[int] = 0, token: str = Header(
 
 @app.put("/api/account/request-payout")
 async def request_payout(idea_id: str, token: str = Header(None, convert_underscores=False)):
-    auth.verify_token(token)
+    auth.verify_access_token(token)
     is_db_up()
     cursor = db.cursor(dictionary=True)
 
@@ -529,7 +527,7 @@ async def request_payout(idea_id: str, token: str = Header(None, convert_undersc
 
 @app.get("/api/payment/create")
 async def create_payment(idea_id: str, token: str = Header(None, convert_underscores=False)):
-    token_data = auth.verify_token(token)
+    token_data = auth.verify_access_token(token)
     # Check if idea id is valid MD5 hash
     if len(idea_id) != len(hashlib.md5().hexdigest()):
         raise HTTPException(status_code=status.HTTP_406_NOT_ACCEPTABLE, detail={
@@ -605,7 +603,7 @@ async def delete_payment(intent_id: str):
 
 @app.get("/api/payment/get")
 def get_payment(token: str = Header(None, convert_underscores=False)):
-    token_data = auth.verify_token(token)
+    token_data = auth.verify_access_token(token)
     is_db_up()
     cursor = db.cursor(dictionary=True)
     cursor.execute("SELECT id FROM payments WHERE user_id=%s", (token_data.user_id,))
@@ -677,7 +675,7 @@ def get_folder_for_file(filetype):
 @app.post("/api/files/upload")
 async def upload_file(idea_id: Optional[str] = None, files: list[UploadFile] = File(...),
                       token: str = Header(None, convert_underscores=False)):
-    auth.verify_token(token)
+    auth.verify_access_token(token)
     # TODO: File upload part
     is_db_up()
     cursor = db.cursor(dictionary=True)
@@ -705,7 +703,7 @@ async def upload_file(idea_id: Optional[str] = None, files: list[UploadFile] = F
 
 @app.get("/api/files/download")
 async def download_file(file_id: str, token: str):
-    auth.verify_token(token)
+    auth.verify_access_token(token)
 
     is_db_up()
     cursor = db.cursor(dictionary=True)
@@ -716,16 +714,20 @@ async def download_file(file_id: str, token: str):
     return FileResponse(path=file["absolute_path"], filename=file["name"], media_type=file["content_type"])
 
 
-@app.get("/api/account/forgotten-password")
-async def reset_password(token: str = Header(None, convert_underscores=False)):
-    token_data = auth.verify_token(token)
-
+@app.post("/api/account/request-password-reset")
+async def reset_password(email: UserPasswordReset):
     is_db_up()
     cursor = db.cursor(dictionary=True)
-    cursor.execute("SELECT first_name, last_name, username, email FROM users WHERE id=%s", (token_data.user_id,))
+    cursor.execute(
+        "SELECT id, first_name, CONCAT(first_name, ' ', last_name) AS name, username, email FROM users WHERE email=%s",
+        (email.email,)
+    )
     user = cursor.fetchone()
-
-    password_reset_token = ""
+    if user is None:
+        return ':('
+    password_reset_token = auth.create_password_reset_token(
+        PasswordResetToken(user_id=user["id"], user=user["name"], email=user["email"])
+    )
     requests.post(
         "https://api.eu.mailgun.net/v3/app.creativitycrop.tech/messages",
         auth=("api", str(MAILGUN_API_KEY)),
@@ -743,6 +745,34 @@ async def reset_password(token: str = Header(None, convert_underscores=False)):
     )
     return ':)'
 
+
+@app.post("/api/account/password-reset")
+async def verify_password_reset(new_data: UserPasswordUpdate, token: str = Header(None, convert_underscores=False)):
+    token_data = auth.verify_password_reset_token(token)
+    salt = auth.generate_salt()
+
+    is_db_up()
+    cursor = db.cursor(dictionary=True)
+    try:
+        cursor.execute(
+            "UPDATE users SET salt=%s, pass_hash=%s WHERE id=%s",
+            (salt, auth.hash_password(new_data.pass_hash, salt), token_data.user_id,)
+        )
+    except mysql.connector.errors.Error as ex:
+        raise HTTPException(status_code=status.HTTP_409_NOT_FOUND, detail={"msg": ex.__dict__})
+    access_token = auth.create_access_token(
+        data={
+            "user": token_data.user,
+            "user_id": token_data.user_id
+        }
+    )
+    return {
+        "accessToken": access_token,
+        "expiresIn": JWT_ACCESS_TOKEN_EXPIRE_MINUTES,
+        "authUserState": {
+            "username": token_data.user
+        }
+    }
 
 @app.get("/", response_class=RedirectResponse)
 async def read_root():
