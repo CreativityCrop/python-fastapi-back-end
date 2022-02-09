@@ -1,7 +1,6 @@
-from fastapi import FastAPI, HTTPException, Header, File, UploadFile, Request, Form
+from fastapi import FastAPI, Header, File, UploadFile, Request, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
-from starlette import status
 import threading
 import requests
 import json
@@ -9,6 +8,7 @@ import json
 from app.models.user import *
 from app.models.idea import IdeaPost
 from app.models.token import AccessToken, PasswordResetToken
+from app.models.errors import *
 import app.authentication as auth
 from app.config import *
 
@@ -27,7 +27,9 @@ origins = [
     "localhost:3000",
     "http://78.128.16.152:3000",
     "78.128.16.152:3000",
-    "http://creativitycrop.tech"
+    "http://creativitycrop.tech",
+    "https://creativitycrop.tech",
+    "*"
 ]
 
 app.add_middleware(
@@ -78,22 +80,39 @@ async def register_user(user: UserRegister):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ex.__dict__)
     user_id = cursor.lastrowid
     cursor.close()
-    access_token = auth.create_access_token(
+
+    requests.post(
+        "https://api.eu.mailgun.net/v3/app.creativitycrop.tech/messages",
+        auth=("api", str(MAILGUN_API_KEY)),
         data={
-            "user": user.username,
-            "user_id": user_id
+            "from": "Friendly Bot from CreativityCrop <no-reply@app.creativitycrop.tech>",
+            "to": user.email,
+            "subject": "CreativityCrop - Account Password Recovery  ",
+            "template": "confirm-email",
+            'h:X-Mailgun-Variables': json.dumps({
+                "user_name": user.first_name,
+                "email": user.email,
+                "current_year": datetime.now().year
+            })
         }
     )
-    return {
-        "accessToken": access_token,
-        "expiresIn": JWT_ACCESS_TOKEN_EXPIRE_MINUTES,
-        "authUserState": {
-            "firstName": user.first_name,
-            "lastName": user.last_name,
-            "username": user.username,
-            "email": user.email
-        }
-    }
+    # access_token = auth.create_access_token(
+    #     data={
+    #         "user": user.username,
+    #         "user_id": user_id
+    #     }
+    # )
+    # return {
+    #     "accessToken": access_token,
+    #     "expiresIn": JWT_ACCESS_TOKEN_EXPIRE_MINUTES,
+    #     "authUserState": {
+    #         "firstName": user.first_name,
+    #         "lastName": user.last_name,
+    #         "username": user.username,
+    #         "email": user.email
+    #     }
+    # }
+    return
 
 
 @app.post("/api/auth/login")
@@ -104,13 +123,11 @@ async def login_user(user: UserLogin):
     cursor.execute(query, (user.username,))
     result = cursor.fetchone()
     if result is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={
-            "msg": "Username is wrong or nonexistent", "errno": 101
-        })
+        raise UserNotFoundError
+    if result["verified"] == 0:
+        raise UserNotVerified
     if not auth.verify_password(user.pass_hash, result["salt"], result["pass_hash"]):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail={
-            "msg": "Password is wrong", "errno": 102
-        })
+        raise PasswordIncorrectError
     user_id = result["id"]
     query = "UPDATE users SET date_login = %s WHERE users.username = %s;"
     cursor.execute(query, (datetime.now().isoformat(), user.username))
@@ -141,10 +158,7 @@ async def get_idea_by_id(idea_id: str, token: str = Header(None, convert_undersc
     access_token = auth.verify_access_token(token)
     # This checks if idea id is in the right format, i.e. MD5 hash
     if len(idea_id) != len(hashlib.md5().hexdigest()):
-        raise HTTPException(status_code=status.HTTP_406_NOT_ACCEPTABLE, detail={
-            "msg": "ID validation failed, should be MD5 hash in hex format",
-            "errno": 201
-        })
+        raise IdeaIDInvalidError
     is_db_up()
     cursor = db.cursor(dictionary=True)
     query = "SELECT ideas.*, " \
@@ -160,10 +174,7 @@ async def get_idea_by_id(idea_id: str, token: str = Header(None, convert_undersc
             "errno": 202
         })
     if result["buyer_id"] is not None and result["buyer_id"] is not access_token.user_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail={
-            "msg": "The idea is not owned by the authenticated user",
-            "errno": 203
-        })
+        raise IdeaAccessDeniedError
     # Fetch categories separately cos they are in different table
     cursor.execute("SELECT category FROM ideas_categories WHERE idea_id=%s", (result["id"],))
     result["categories"] = list(map(lambda x: x["category"], cursor.fetchall()))
@@ -197,23 +208,23 @@ def cleanup_database():
         database=DB_NAME
     )
     second_db.autocommit = True
-    cursor = second_db.cursor(dictionary=True)
+    second_cursor = second_db.cursor(dictionary=True)
     # Find payments that did not go through and the time is up
-    cursor.execute("SELECT * FROM payments "
-                   "WHERE status!='succeeded' AND date < DATE_SUB(CURRENT_TIMESTAMP, INTERVAL 10 MINUTE)")
-    payments = cursor.fetchall()
+    second_cursor.execute("SELECT * FROM payments "
+                          "WHERE status!='succeeded' AND date < DATE_SUB(CURRENT_TIMESTAMP, INTERVAL 10 MINUTE)")
+    payments = second_cursor.fetchall()
     # Remove buy lock from ideas and allow them to be on the marketplace
     for payment in payments:
-        cursor.execute("UPDATE ideas SET buyer_id = NULL WHERE id=%s", (payment["idea_id"],))
+        second_cursor.execute("UPDATE ideas SET buyer_id = NULL WHERE id=%s", (payment["idea_id"],))
         stripe.PaymentIntent.cancel(
             stripe.PaymentIntent(payment["id"])
         )
-        cursor.execute("DELETE FROM payments WHERE id = %s", (payment["id"],))
+        second_cursor.execute("DELETE FROM payments WHERE id = %s", (payment["id"],))
     # Delete old categories and likes from ideas that were deleted
-    cursor.execute("DELETE FROM ideas_categories WHERE idea_id NOT IN (SELECT id FROM ideas)")
-    cursor.execute("DELETE FROM ideas_likes WHERE idea_id NOT IN (SELECT id FROM ideas)")
+    second_cursor.execute("DELETE FROM ideas_categories WHERE idea_id NOT IN (SELECT id FROM ideas)")
+    second_cursor.execute("DELETE FROM ideas_likes WHERE idea_id NOT IN (SELECT id FROM ideas)")
     # Close cursor and db everything is complete!
-    cursor.close()
+    second_cursor.close()
     second_db.close()
     print("DB cleaning process is completed!")
 
@@ -240,7 +251,7 @@ async def get_ideas(page: Optional[int] = 0, cat: Optional[str] = None):
 
     query = "SELECT " \
             "ideas.id, seller_id, title, short_desc, date_publish, date_expiry, price, " \
-            "files.public_path AS image_url,"\
+            "files.public_path AS image_url," \
             "(SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id) AS likes " \
             "FROM ideas LEFT JOIN files ON ideas.id=files.id " \
             "WHERE buyer_id IS NULL AND " \
@@ -292,8 +303,9 @@ def get_hottest_ideas():
             "FROM ideas LEFT JOIN files ON ideas.id=files.id " \
             "WHERE buyer_id IS NULL ORDER BY likes DESC LIMIT 5"
     cursor.execute(query)
-
-    return cursor.fetchall()
+    results = cursor.fetchall()
+    cursor.close()
+    return results
 
 
 @app.post("/api/ideas/post")
@@ -325,10 +337,7 @@ async def like_idea(idea_id: str, token: str = Header(None, convert_underscores=
 
     # This checks if idea id is in the right format, i.e. MD5 hash
     if len(idea_id) != len(hashlib.md5().hexdigest()):
-        raise HTTPException(status_code=status.HTTP_406_NOT_ACCEPTABLE, detail={
-            "msg": "ID validation failed, should be MD5 hash in hex format",
-            "errno": 201
-        })
+        raise IdeaIDInvalidError
 
     is_db_up()
 
@@ -420,15 +429,26 @@ async def update_account(avatar: Optional[UploadFile] = File(None), username: st
         )
         result = {
             "token": auth.create_access_token(
-                        data={
-                            "user": token_data.user,
-                            "user_id": token_data.user_id
-                        }
-                    )
+                data={
+                    "user": token_data.user,
+                    "user_id": token_data.user_id
+                }
+            )
         }
     cursor.close()
-    db.commit()
     return result
+
+
+@app.get("/api/account/verify-email", response_class=RedirectResponse)
+async def verify_email_account(email: str):
+    is_db_up()
+    cursor = db.cursor(dictionary=True)
+    cursor.execute("UPDATE users SET verified=TRUE WHERE email=%s", (email,))
+    if cursor.rowcount == 0:
+        cursor.close()
+        raise UserNotFoundError
+    cursor.close()
+    return "http://localhost:3000/login"
 
 
 @app.get("/api/account/ideas/bought")
@@ -515,6 +535,9 @@ async def get_ideas_bought_by_user(page: Optional[int] = 0, token: str = Header(
 @app.put("/api/account/request-payout")
 async def request_payout(idea_id: str, token: str = Header(None, convert_underscores=False)):
     auth.verify_access_token(token)
+    if len(idea_id) != len(hashlib.md5().hexdigest()):
+        raise IdeaIDInvalidError
+
     is_db_up()
     cursor = db.cursor(dictionary=True)
 
@@ -525,15 +548,78 @@ async def request_payout(idea_id: str, token: str = Header(None, convert_undersc
     return {"payoutStatus": "processing"}
 
 
+@app.post("/api/account/request-password-reset")
+async def request_password_reset(email: UserPasswordReset):
+    is_db_up()
+    cursor = db.cursor(dictionary=True)
+    cursor.execute(
+        "SELECT id, first_name, CONCAT(first_name, ' ', last_name) AS name, username, email FROM users WHERE email=%s",
+        (email.email,)
+    )
+    user = cursor.fetchone()
+    if user is None:
+        return ':('
+    password_reset_token = auth.create_password_reset_token(
+        PasswordResetToken(user_id=user["id"], user=user["name"], email=user["email"])
+    )
+    requests.post(
+        "https://api.eu.mailgun.net/v3/app.creativitycrop.tech/messages",
+        auth=("api", str(MAILGUN_API_KEY)),
+        data={
+            "from": "Friendly Bot from CreativityCrop <no-reply@app.creativitycrop.tech>",
+            "to": user["email"],
+            "subject": "CreativityCrop - Account Password Recovery  ",
+            "template": "password-recovery",
+            'h:X-Mailgun-Variables': json.dumps({
+                "user_name": user["first_name"],
+                "password_token": password_reset_token,
+                "current_year": datetime.now().year
+            })
+        }
+    )
+    cursor.close()
+
+    return ':)'
+
+
+@app.put("/api/account/password-reset")
+async def password_reset(new_data: UserPasswordUpdate, token: str = Header(None, convert_underscores=False)):
+    token_data = auth.verify_password_reset_token(token)
+    salt = auth.generate_salt()
+
+    is_db_up()
+    cursor = db.cursor(dictionary=True)
+    try:
+        cursor.execute(
+            "UPDATE users SET salt=%s, pass_hash=%s WHERE id=%s",
+            (salt, auth.hash_password(new_data.pass_hash, salt), token_data.user_id,)
+        )
+    except mysql.connector.errors.Error as ex:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"msg": ex.__dict__})
+    access_token = auth.create_access_token(
+        data={
+            "user": token_data.user,
+            "user_id": token_data.user_id
+        }
+    )
+    cursor.close()
+
+    return {
+        "accessToken": access_token,
+        "expiresIn": JWT_ACCESS_TOKEN_EXPIRE_MINUTES,
+        "authUserState": {
+            "username": token_data.user
+        }
+    }
+
+
 @app.get("/api/payment/create")
 async def create_payment(idea_id: str, token: str = Header(None, convert_underscores=False)):
+    print(token)
     token_data = auth.verify_access_token(token)
     # Check if idea id is valid MD5 hash
     if len(idea_id) != len(hashlib.md5().hexdigest()):
-        raise HTTPException(status_code=status.HTTP_406_NOT_ACCEPTABLE, detail={
-            "msg": "ID validation failed, should be MD5 hash in hex format",
-            "errno": 201
-        })
+        raise IdeaIDInvalidError
     is_db_up()
 
     cursor = db.cursor(dictionary=True)
@@ -561,10 +647,7 @@ async def create_payment(idea_id: str, token: str = Header(None, convert_undersc
                    (idea_id, token_data.user_id))
     idea = cursor.fetchone()
     if idea is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={
-            "msg": "The idea was not found",
-            "errno": 202
-        })
+        raise IdeaNotFoundError
     if idea["buyer_id"] is not None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail={
             "msg": "The idea has been already sold",
@@ -593,7 +676,7 @@ async def create_payment(idea_id: str, token: str = Header(None, convert_undersc
     }
 
 
-@app.post("/api/payment/cancel")
+@app.delete("/api/payment/cancel")
 async def delete_payment(intent_id: str):
     stripe.PaymentIntent.cancel(
         stripe.PaymentIntent(intent_id)
@@ -673,12 +756,24 @@ def get_folder_for_file(filetype):
 
 
 @app.post("/api/files/upload")
-async def upload_file(idea_id: Optional[str] = None, files: list[UploadFile] = File(...),
-                      token: str = Header(None, convert_underscores=False)):
-    auth.verify_access_token(token)
+async def upload_files(idea_id: Optional[str] = None, files: list[UploadFile] = File(...),
+                       token: str = Header(None, convert_underscores=False)):
+    token_data = auth.verify_access_token(token)
+    if len(idea_id) != len(hashlib.md5().hexdigest()):
+        raise IdeaIDInvalidError
     # TODO: File upload part
     is_db_up()
     cursor = db.cursor(dictionary=True)
+    cursor.execute("SELECT date_publish, seller_id FROM ideas WHERE id=%s", (idea_id,))
+    result = cursor.fetchone()
+    if token_data.user_id != result["seller_id"]:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail={"msg": "You cannot upload files for ideas that aren't yours"}
+                            )
+    if datetime.now() > result["date_publish"] + timedelta(minutes=5):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail={"msg": "You cannot upload files after idea submission"}
+                            )
     for file in files:
         if file.content_type not in CDN_ALLOWED_CONTENT_TYPES:
             raise HTTPException(status_code=406, detail="File type is not allowed for upload!")
@@ -696,7 +791,6 @@ async def upload_file(idea_id: Optional[str] = None, files: list[UploadFile] = F
                         f'{CDN_FILES_PATH + get_folder_for_file(file.content_type) + file.filename}',
                         f'{CDN_URL + get_folder_for_file(file.content_type) + file.filename}', file.content_type))
     cursor.close()
-    db.commit()
 
     return
 
@@ -713,66 +807,6 @@ async def download_file(file_id: str, token: str):
 
     return FileResponse(path=file["absolute_path"], filename=file["name"], media_type=file["content_type"])
 
-
-@app.post("/api/account/request-password-reset")
-async def reset_password(email: UserPasswordReset):
-    is_db_up()
-    cursor = db.cursor(dictionary=True)
-    cursor.execute(
-        "SELECT id, first_name, CONCAT(first_name, ' ', last_name) AS name, username, email FROM users WHERE email=%s",
-        (email.email,)
-    )
-    user = cursor.fetchone()
-    if user is None:
-        return ':('
-    password_reset_token = auth.create_password_reset_token(
-        PasswordResetToken(user_id=user["id"], user=user["name"], email=user["email"])
-    )
-    requests.post(
-        "https://api.eu.mailgun.net/v3/app.creativitycrop.tech/messages",
-        auth=("api", str(MAILGUN_API_KEY)),
-        data={
-            "from": "Friendly Bot from CreativityCrop <no-reply@app.creativitycrop.tech>",
-            "to": [user["email"], "test-jhc1xsope@srv1.mail-tester.com"],
-            "subject": "CreativityCrop - Account Password Recovery  ",
-            "template": "password-recovery",
-            'h:X-Mailgun-Variables': json.dumps({
-                "user_name": user["first_name"],
-                "password_token": password_reset_token,
-                "current_year": datetime.now().year
-            })
-        }
-    )
-    return ':)'
-
-
-@app.post("/api/account/password-reset")
-async def verify_password_reset(new_data: UserPasswordUpdate, token: str = Header(None, convert_underscores=False)):
-    token_data = auth.verify_password_reset_token(token)
-    salt = auth.generate_salt()
-
-    is_db_up()
-    cursor = db.cursor(dictionary=True)
-    try:
-        cursor.execute(
-            "UPDATE users SET salt=%s, pass_hash=%s WHERE id=%s",
-            (salt, auth.hash_password(new_data.pass_hash, salt), token_data.user_id,)
-        )
-    except mysql.connector.errors.Error as ex:
-        raise HTTPException(status_code=status.HTTP_409_NOT_FOUND, detail={"msg": ex.__dict__})
-    access_token = auth.create_access_token(
-        data={
-            "user": token_data.user,
-            "user_id": token_data.user_id
-        }
-    )
-    return {
-        "accessToken": access_token,
-        "expiresIn": JWT_ACCESS_TOKEN_EXPIRE_MINUTES,
-        "authUserState": {
-            "username": token_data.user
-        }
-    }
 
 @app.get("/", response_class=RedirectResponse)
 async def read_root():

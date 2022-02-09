@@ -6,6 +6,7 @@ import bcrypt
 from jose import JWTError, jwt
 
 from app.config import *
+from app.models.errors import TokenInvalidError
 from app.models.token import *
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -39,10 +40,7 @@ def verify_access_token(token: str) -> AccessToken:
     except JWTError as ex:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail={"msg": ex.__str__(), "errno": 103})
     except AttributeError:
-        raise HTTPException(status_code=status.HTTP_406_NOT_ACCEPTABLE, detail={
-            "msg": "Token cannot be null",
-            "errno": 103
-        })
+        raise TokenInvalidError
     return AccessToken.parse_obj(payload)
 
 
@@ -58,8 +56,5 @@ def verify_password_reset_token(token: str) -> PasswordResetToken:
     except JWTError as ex:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail={"msg": ex.__str__(), "errno": 103})
     except AttributeError:
-        raise HTTPException(status_code=status.HTTP_406_NOT_ACCEPTABLE, detail={
-            "msg": "Token cannot be null",
-            "errno": 103
-        })
+        raise TokenInvalidError
     return PasswordResetToken.parse_obj(payload)
