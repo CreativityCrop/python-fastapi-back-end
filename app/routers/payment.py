@@ -1,0 +1,180 @@
+from fastapi import APIRouter, Header, Request
+import stripe
+import hashlib
+import mysql.connector
+
+from app.config import *
+import app.authentication as auth
+from app.models.errors import *
+
+router = APIRouter(
+    prefix="/payment",
+    tags=["payment"],
+)
+
+stripe.api_key = str(STRIPE_API_KEY)
+
+db = mysql.connector.connect()
+
+
+def is_db_up():
+    try:
+        db.ping(reconnect=True, attempts=3, delay=5)
+    except mysql.connector.errors.InterfaceError as ex:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=ex.__dict__)
+    return True
+
+
+# Event that set-ups the application for startup
+@router.on_event("startup")
+async def startup_event():
+    global db
+    db = mysql.connector.connect(
+        host=DB_HOST,
+        user=DB_USER,
+        password=DB_PASS,
+        database=DB_NAME
+    )
+    # This makes it work without having to commit after every query
+    db.autocommit = True
+
+
+@router.get("/create")
+async def create_payment(idea_id: str, token: str = Header(None, convert_underscores=False)):
+    token_data = auth.verify_access_token(token)
+    # Check if idea id is valid MD5 hash
+    if len(idea_id) != len(hashlib.md5().hexdigest()):
+        raise IdeaIDInvalidError
+
+    is_db_up()
+    cursor = db.cursor(dictionary=True)
+
+    cursor.execute("SELECT "
+                   "(SELECT COUNT(*) FROM payments WHERE idea_id=%s) AS idea_count, "
+                   "(SELECT COUNT(*) FROM payments WHERE user_id=%s AND status != 'succeeded') AS user_count",
+                   (idea_id, token_data.user_id)
+                   )
+    check = cursor.fetchone()
+    if check["idea_count"] != 0:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={
+            "msg": "This idea is already sold or in process of buying!",
+            "errno": "new one pls"
+        })
+    if check["user_count"] != 0:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={
+            "msg": "Finish the previous payment and then start a new one!",
+            "errno": "new one again"
+        })
+
+    cursor.execute("SELECT ideas.price, ideas.title, ideas.seller_id, ideas.buyer_id, users.id AS user_id, users.email "
+                   "FROM ideas, users "
+                   "WHERE ideas.id=%s AND users.id=%s",
+                   (idea_id, token_data.user_id))
+    idea = cursor.fetchone()
+    if idea is None:
+        raise IdeaNotFoundError
+    if idea["buyer_id"] is not None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail={
+            "msg": "The idea has been already sold",
+            "errno": "MAKE A NEW ONE"
+        })
+    intent = stripe.PaymentIntent.create(
+        amount=int(idea["price"] * 100),
+        # customer=result["id"],
+        receipt_email=idea["email"],
+        currency="usd",
+        description="CreativityCrop - Selling the idea: " + idea["title"],
+        metadata={
+            "idea_id": idea_id,
+            "seller_id": idea["seller_id"],
+            "buyer_id": token_data.user_id
+        }
+
+    )
+    cursor.execute("INSERT INTO payments(id, amount, currency, idea_id, user_id, status) "
+                   "VALUES(%s, %s, %s, %s, %s, %s)",
+                   (intent["id"], intent["amount"], intent["currency"], idea_id, idea["user_id"], intent["status"]))
+    # Make the buyer_id -1 to stop it from appearing in the list of ideas for sale
+    cursor.execute("UPDATE ideas SET buyer_id=-1 WHERE id=%s", (idea_id,))
+    cursor.close()
+    return {
+        "clientSecret": intent["client_secret"]
+    }
+
+
+@router.delete("/cancel")
+async def delete_payment(intent_id: str):
+    stripe.PaymentIntent.cancel(
+        stripe.PaymentIntent(intent_id)
+    )
+    return stripe.PaymentIntent.list()
+
+
+@router.get("/get")
+def get_payment(token: str = Header(None, convert_underscores=False)):
+    token_data = auth.verify_access_token(token)
+
+    is_db_up()
+    cursor = db.cursor(dictionary=True)
+    cursor.execute("SELECT id FROM payments WHERE user_id=%s", (token_data.user_id,))
+    result = cursor.fetchone()
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={
+            "msg": "Payment not found",
+            "errno": "Make up a new one pls"
+        })
+    intent = stripe.PaymentIntent.retrieve(result["id"], )
+
+    cursor.close()
+
+    return intent["client_secret"]
+
+
+@router.post('/webhook')
+async def webhook_received(request: Request):
+    sig_header = request.headers.get("stripe-signature")
+    webhook_secret = str(STRIPE_WEBHOOK_SECRET)
+    try:
+        event = stripe.Webhook.construct_event(await request.body(), sig_header, webhook_secret)
+    except ValueError as ex:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=ex.__dict__)
+    except stripe.error.SignatureVerificationError:
+        print("Signature invalid:")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"text": "Invalid signature"})
+
+    is_db_up()
+    cursor = db.cursor(dictionary=True)
+    intent = {}
+    if event['type'] == 'payment_intent.canceled':
+        intent = event['data']['object']
+    elif event['type'] == 'payment_intent.payment_failed':
+        intent = event['data']['object']
+    elif event['type'] == 'payment_intent.processing':
+        intent = event['data']['object']
+    elif event['type'] == 'payment_intent.requires_action':
+        intent = event['data']['object']
+    elif event['type'] == 'payment_intent.succeeded':
+        intent = event['data']['object']
+    else:
+        print('Unhandled event type {}'.format(event['type']))
+    cursor.execute(
+        "UPDATE payments SET amount=%s, currency=%s, status=%s WHERE id=%s",
+        (intent["amount"], intent["currency"], intent["status"], intent["id"])
+    )
+    if intent["status"] == "succeeded":
+        cursor.execute(
+            "UPDATE ideas SET buyer_id=%s, date_bought=CURRENT_TIMESTAMP() WHERE id=%s",
+            (intent["metadata"]["buyer_id"], intent["metadata"]["idea_id"])
+        )
+        cursor.execute(
+            "INSERT INTO payouts(idea_id, user_id) VALUES(%s, %s)",
+            (intent["metadata"]["idea_id"], intent["metadata"]["seller_id"])
+        )
+    cursor.close()
+
+    return {'status': 'success'}
+
+
+@router.on_event("shutdown")
+async def shutdown_event():
+    db.close()
