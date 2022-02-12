@@ -1,18 +1,16 @@
 from fastapi import APIRouter, Header, File, UploadFile, Form
-from fastapi.responses import RedirectResponse
 import mysql.connector
 import stripe
 import aiofiles as aiofiles
-import requests
 import hashlib
-import json
 
 from app.config import *
 import app.authentication as auth
-from app.models.user import *
-from app.models.token import AccessToken, PasswordResetToken
+from app.models.idea import IdeaFile
+from app.models.token import AccessToken
 from app.models.errors import *
-
+from app.responses.account import *
+from app.responses.auth import TokenResponse
 
 router = APIRouter(
     prefix="/account",
@@ -46,10 +44,9 @@ async def startup_event():
     db.autocommit = True
 
 
-@router.get("")
+@router.get("", response_model=AccountData)
 async def get_account(token: str = Header(None, convert_underscores=False)):
     token_data: AccessToken = auth.verify_access_token(token)
-
     is_db_up()
     cursor = db.cursor(dictionary=True)
     query = "SELECT " \
@@ -66,12 +63,38 @@ async def get_account(token: str = Header(None, convert_underscores=False)):
             "WHERE users.id=%s"
     cursor.execute(query, (token_data.user_id,))
     result = cursor.fetchone()
+    cursor.close()
     if result["unfinished_intent"] is not None:
         intent = stripe.PaymentIntent.retrieve(result["unfinished_intent"], )
         result["unfinished_intent_secret"] = intent["client_secret"]
-    cursor.close()
+        return AccountData(
+            id=result["id"],
+            firstName=result["first_name"],
+            lastName=result["last_name"],
+            email=result["email"],
+            username=result["username"],
+            dateRegister=result["date_register"],
+            dateLogin=result["date_login"],
+            avatarURL=result["avatar_url"],
+            unfinishedPaymentIntent=result["unfinished_intent"],
+            unfinishedPaymentIdeaID=result["unfinished_payment_idea"],
+            unfinishedPaymentIdeaTitle=result["title"],
+            unfinishedPaymentIdeaShortDesc=result["short_desc"],
+            unfinishedPaymentIdeaPrice=result["price"],
+            unfinishedPaymentIdeaPictureURL=result["idea_img"],
+            unfinishedPaymentIntentSecret=result["unfinished_intent_secret"]
+        )
 
-    return result
+    return AccountData(
+        id=result["id"],
+        firstName=result["first_name"],
+        lastName=result["last_name"],
+        email=result["email"],
+        username=result["username"],
+        dateRegister=result["date_register"],
+        dateLogin=result["date_login"],
+        avatarURL=result["avatar_url"]
+    )
 
 
 @router.put("")
@@ -99,8 +122,8 @@ async def update_account(avatar: Optional[UploadFile] = File(None), username: st
         result = {"status": "success"}
     if username is not None:
         cursor.execute("UPDATE users SET username=%s WHERE id=%s", (username, token_data.user_id))
-        result = {"status": "success"}
         token_data.user = username
+        result = {"token": auth.create_access_token(AccessToken(user_id=token_data.user_id, user=token_data.user))}
     if email is not None:
         cursor.execute("UPDATE users SET email=%s WHERE id=%s", (email, token_data.user_id))
         result = {"status": "success"}
@@ -110,27 +133,11 @@ async def update_account(avatar: Optional[UploadFile] = File(None), username: st
             "UPDATE users SET salt=%s, pass_hash=%s WHERE id=%s",
             (salt, auth.hash_password(pass_hash, salt), token_data.user_id)
         )
-        result = {
-            "token": auth.create_access_token(
-                data={
-                    "user": token_data.user,
-                    "user_id": token_data.user_id
-                }
-            )
-        }
+        result = TokenResponse(
+            accessToken=auth.create_access_token(AccessToken(user_id=token_data.user_id, user=token_data.user))
+        )
     cursor.close()
     return result
-
-
-@router.get("/verify-email", response_class=RedirectResponse)
-async def verify_email_account(email: str):
-    is_db_up()
-    cursor = db.cursor(dictionary=True)
-    cursor.execute("UPDATE users SET verified=TRUE WHERE email=%s", (email,))
-    if cursor.rowcount == 0:
-        raise UserNotFoundError
-    cursor.close()
-    return "http://localhost:3000/login"
 
 
 @router.get("/ideas/bought")
@@ -169,10 +176,34 @@ async def get_ideas_bought_by_user(page: Optional[int] = 0, token: str = Header(
 
     cursor.close()
 
-    return {
-        "countLeft": ideas_left,
-        "ideas": results
-    }
+    return BoughtIdeas(
+        countLeft=ideas_left,
+        ideas=list(map(lambda idea: BoughtIdea(
+            id=idea["id"],
+            sellerID=idea["seller_id"],
+            buyerID=idea["buyer_id"],
+            title=idea["title"],
+            likes=idea["likes"],
+            imageURL=idea["image_url"],
+            shortDesc=idea["short_desc"],
+            longDesc=idea["long_desc"],
+            datePublish=idea["date_publish"],
+            dateExpiry=idea["date_expiry"],
+            dateBought=idea["date_bought"],
+            categories=idea["categories"],
+            files=list(map(lambda file: IdeaFile(
+                id=file["id"],
+                ideaID=file["idea_id"],
+                name=file["name"],
+                size=file["size"],
+                absolutePath=file["absolute_path"],
+                publicPath=file["public_path"],
+                contentType=file["content_type"],
+                uploadDate=file["upload_date"]
+            ), result["files"])),
+            price=idea["price"]
+        ), results))
+    )
 
 
 @router.get("/ideas/sold")
@@ -182,7 +213,7 @@ async def get_ideas_bought_by_user(page: Optional[int] = 0, token: str = Header(
 
     is_db_up()
     cursor = db.cursor(dictionary=True)
-    query = "SELECT ideas.id, seller_id, title, price, date_publish, " \
+    query = "SELECT ideas.id, seller_id, title, price, date_publish, date_bought, " \
             "files.public_path AS image_url, " \
             "( SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id ) AS likes, " \
             "( SELECT status FROM payouts WHERE idea_id=ideas.id ) AS payout_status " \
@@ -210,10 +241,20 @@ async def get_ideas_bought_by_user(page: Optional[int] = 0, token: str = Header(
 
     cursor.close()
 
-    return {
-        "countLeft": ideas_left,
-        "ideas": results
-    }
+    return SoldIdeas(
+        countLeft=ideas_left,
+        ideas=list(map(lambda idea: SoldIdea(
+            id=idea["id"],
+            sellerID=idea["seller_id"],
+            title=idea["title"],
+            datePublish=idea["date_publish"],
+            dateBought=idea["date_bought"],
+            price=idea["price"],
+            likes=idea["likes"],
+            imageURL=idea["image_url"],
+            payoutStatus=idea["payout_status"]
+        ), results))
+    )
 
 
 @router.put("/request-payout")
@@ -227,72 +268,6 @@ async def request_payout(idea_id: str, token: str = Header(None, convert_undersc
     cursor.close()
 
     return {"payoutStatus": "processing"}
-
-
-@router.post("/request-password-reset")
-async def request_password_reset(email: UserPasswordReset):
-    is_db_up()
-    cursor = db.cursor(dictionary=True)
-    cursor.execute(
-        "SELECT id, first_name, CONCAT(first_name, ' ', last_name) AS name, username, email FROM users WHERE email=%s",
-        (email.email,)
-    )
-    user = cursor.fetchone()
-    if user is None:
-        return ':('
-    password_reset_token = auth.create_password_reset_token(
-        PasswordResetToken(user_id=user["id"], user=user["name"], email=user["email"])
-    )
-    requests.post(
-        "https://api.eu.mailgun.net/v3/app.creativitycrop.tech/messages",
-        auth=("api", str(MAILGUN_API_KEY)),
-        data={
-            "from": "Friendly Bot from CreativityCrop <no-reply@app.creativitycrop.tech>",
-            "to": user["email"],
-            "subject": "CreativityCrop - Account Password Recovery  ",
-            "template": "password-recovery",
-            'h:X-Mailgun-Variables': json.dumps({
-                "user_name": user["first_name"],
-                "password_token": password_reset_token,
-                "current_year": datetime.now().year
-            })
-        }
-    )
-    cursor.close()
-
-    return ':)'
-
-
-@router.put("/password-reset")
-async def password_reset(new_data: UserPasswordUpdate, token: str = Header(None, convert_underscores=False)):
-    token_data = auth.verify_password_reset_token(token)
-    salt = auth.generate_salt()
-
-    is_db_up()
-    cursor = db.cursor(dictionary=True)
-    try:
-        cursor.execute(
-            "UPDATE users SET salt=%s, pass_hash=%s WHERE id=%s",
-            (salt, auth.hash_password(new_data.pass_hash, salt), token_data.user_id,)
-        )
-    except mysql.connector.errors.Error as ex:
-        cursor.close()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"msg": ex.__dict__})
-    access_token = auth.create_access_token(
-        data={
-            "user": token_data.user,
-            "user_id": token_data.user_id
-        }
-    )
-    cursor.close()
-
-    return {
-        "accessToken": access_token,
-        "expiresIn": JWT_ACCESS_TOKEN_EXPIRE_MINUTES,
-        "authUserState": {
-            "username": token_data.user
-        }
-    }
 
 
 @router.on_event("shutdown")
