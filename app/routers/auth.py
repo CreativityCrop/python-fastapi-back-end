@@ -2,12 +2,14 @@ from fastapi import APIRouter, Header
 import mysql.connector
 import requests
 import json
+from datetime import datetime
 
 from app.config import *
 from app import authentication as auth
-from app.models.user import *
+from app.models.user import UserRegister, UserLogin, UserPasswordReset, UserPasswordUpdate
+from app.models.token import AccessToken, EmailVerifyToken, PasswordResetToken
 from app.models.errors import *
-
+from app.responses.auth import TokenResponse
 
 router = APIRouter(
     prefix="/auth",
@@ -52,8 +54,12 @@ async def register_user(user: UserRegister):
         cursor.execute(query, data)
     except mysql.connector.errors.IntegrityError as ex:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ex.__dict__)
-    # user_id = cursor.lastrowid
+    user_id = cursor.lastrowid
     cursor.close()
+
+    email_token = auth.create_email_verify_token(
+        EmailVerifyToken(user_id=user_id, user=user.username, email=user.email)
+    )
 
     requests.post(
         "https://api.eu.mailgun.net/v3/app.creativitycrop.tech/messages",
@@ -65,31 +71,16 @@ async def register_user(user: UserRegister):
             "template": "confirm-email",
             'h:X-Mailgun-Variables': json.dumps({
                 "user_name": user.first_name,
-                "email": user.email,
+                "email_token": email_token,
                 "current_year": datetime.now().year
             })
         }
     )
-    # access_token = auth.create_access_token(
-    #     data={
-    #         "user": user.username,
-    #         "user_id": user_id
-    #     }
-    # )
-    # return {
-    #     "accessToken": access_token,
-    #     "expiresIn": JWT_ACCESS_TOKEN_EXPIRE_MINUTES,
-    #     "authUserState": {
-    #         "firstName": user.first_name,
-    #         "lastName": user.last_name,
-    #         "username": user.username,
-    #         "email": user.email
-    #     }
-    # }
+
     return
 
 
-@router.post("/login")
+@router.post("/login", response_model=TokenResponse)
 async def login_user(user: UserLogin):
     is_db_up()
     cursor = db.cursor(dictionary=True)
@@ -106,24 +97,81 @@ async def login_user(user: UserLogin):
     query = "UPDATE users SET date_login = %s WHERE users.username = %s;"
     cursor.execute(query, (datetime.now().isoformat(), user.username))
     access_token = auth.create_access_token(
-        data={
-            "user": user.username,
-            "user_id": user_id
-        }
+        AccessToken(user_id=user_id, user=user.username)
     )
     cursor.close()
-    return {
-        "accessToken": access_token,
-        "expiresIn": JWT_ACCESS_TOKEN_EXPIRE_MINUTES,
-        "authUserState": {
-            "username": user.username
-        }
-    }
+    return TokenResponse(accessToken=access_token)
 
 
 @router.get("/verify")
 def verify_token(token: str = Header(None, convert_underscores=False)):
     return auth.verify_access_token(token)
+
+
+@router.get("/verify-email", response_model=TokenResponse)
+async def verify_email_account(token: str):
+    is_db_up()
+    token_data = auth.verify_email_verify_token(token)
+    cursor = db.cursor(dictionary=True)
+    cursor.execute("UPDATE users SET verified=TRUE WHERE email=%s", (token_data.email,))
+    cursor.close()
+    auth_token = auth.create_access_token(AccessToken(user_id=token_data.user_id, user=token_data.user))
+    return TokenResponse(accessToken=auth_token)
+
+
+@router.post("/request-password-reset")
+async def request_password_reset(email: UserPasswordReset):
+    is_db_up()
+    cursor = db.cursor(dictionary=True)
+    cursor.execute(
+        "SELECT id, first_name, CONCAT(first_name, ' ', last_name) AS name, username, email FROM users WHERE email=%s",
+        (email.email,)
+    )
+    user = cursor.fetchone()
+    if user is None:
+        return ':('
+    password_reset_token = auth.create_password_reset_token(
+        PasswordResetToken(user_id=user["id"], user=user["name"], email=user["email"])
+    )
+    requests.post(
+        "https://api.eu.mailgun.net/v3/app.creativitycrop.tech/messages",
+        auth=("api", str(MAILGUN_API_KEY)),
+        data={
+            "from": "Friendly Bot from CreativityCrop <no-reply@app.creativitycrop.tech>",
+            "to": user["email"],
+            "subject": "CreativityCrop - Account Password Recovery  ",
+            "template": "password-recovery",
+            'h:X-Mailgun-Variables': json.dumps({
+                "user_name": user["first_name"],
+                "password_token": password_reset_token,
+                "current_year": datetime.now().year
+            })
+        }
+    )
+    cursor.close()
+
+    return ':)'
+
+
+@router.put("/password-reset", response_model=TokenResponse)
+async def password_reset(new_data: UserPasswordUpdate, token: str = Header(None, convert_underscores=False)):
+    token_data = auth.verify_password_reset_token(token)
+    salt = auth.generate_salt()
+
+    is_db_up()
+    cursor = db.cursor(dictionary=True)
+    try:
+        cursor.execute(
+            "UPDATE users SET salt=%s, pass_hash=%s WHERE id=%s",
+            (salt, auth.hash_password(new_data.pass_hash, salt), token_data.user_id,)
+        )
+    except mysql.connector.errors.Error as ex:
+        cursor.close()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"msg": ex.__dict__})
+    access_token = auth.create_access_token(AccessToken(user_id=token_data.user_id, user=token_data.user))
+    cursor.close()
+
+    return TokenResponse(accessToken=access_token)
 
 
 @router.on_event("shutdown")

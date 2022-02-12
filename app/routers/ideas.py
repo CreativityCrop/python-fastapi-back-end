@@ -7,7 +7,7 @@ from app.config import *
 from app import authentication as auth
 from app.worker import DatabaseCleanupWorker
 from app.models.user import *
-from app.models.idea import IdeaPost
+from app.models.idea import PostIdea
 from app.models.token import AccessToken
 from app.models.errors import *
 
@@ -163,7 +163,7 @@ def get_hottest_ideas():
 
 
 @router.post("/post")
-async def post_idea(idea: IdeaPost, token: str = Header(None, convert_underscores=False)):
+async def post_idea(idea: PostIdea, token: str = Header(None, convert_underscores=False)):
     token_data: AccessToken = auth.verify_access_token(token)
 
     idea_id = hashlib.md5(idea.long_desc.encode()).hexdigest()
