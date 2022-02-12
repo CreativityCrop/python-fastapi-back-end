@@ -52,7 +52,7 @@ MAILGUN_API_KEY = config("MAILGUN_API_KEY", cast=Secret, default='1ee6e3467a7a34
 SUPER_USERS = config("SUPER_USERS", cast=set, default={"georgi", "zorry"})
 
 # Database properties
-DB_HOST = 'creativitycrop.tech'
+DB_HOST = 'localhost'
 DB_USER = 'creativity_crop'
 DB_PASS = 'qO4n3BPtA4MgStJW'
 DB_NAME = 'creativity_crop'
