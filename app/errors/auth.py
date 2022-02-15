@@ -31,7 +31,7 @@ class UserNotVerifiedError(HTTPException):
 
 class TokenNullError(HTTPException):
     def __init__(self) -> None:
-        super().__init__(status_code=status.HTTP_400_BAD_REQUEST, detail={
+        super().__init__(status_code=status.HTTP_401_UNAUTHORIZED, detail={
             "title": "Token Null",
             "msg": "Token cannot be null",
             "errno": 104
@@ -40,7 +40,7 @@ class TokenNullError(HTTPException):
 
 class AccessTokenExpiredError(HTTPException):
     def __init__(self) -> None:
-        super().__init__(status_code=status.HTTP_406_NOT_ACCEPTABLE, detail={
+        super().__init__(status_code=status.HTTP_401_UNAUTHORIZED, detail={
             "title": "Token Expired",
             "msg": "Token has expired, please login again",
             "errno": 105
@@ -49,7 +49,7 @@ class AccessTokenExpiredError(HTTPException):
 
 class TokenInvalidError(HTTPException):
     def __init__(self) -> None:
-        super().__init__(status_code=status.HTTP_400_BAD_REQUEST, detail={
+        super().__init__(status_code=status.HTTP_401_UNAUTHORIZED, detail={
             "title": "Token Invalid",
             "msg": "Token is either invalid or in unsuitable format",
             "errno": 106

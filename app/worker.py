@@ -10,6 +10,7 @@ stripe.api_key = '***REMOVED***' \
                  '***REMOVED***'
 
 
+# TODO: Add user cleanup
 def cleanup_database():
     print("Starting DB cleanup process")
 

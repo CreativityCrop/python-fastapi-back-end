@@ -122,8 +122,8 @@ async def verify_email_account(token: str):
     cursor = db.cursor(dictionary=True)
     cursor.execute("UPDATE users SET verified=TRUE WHERE email=%s", (token_data.email,))
     cursor.close()
-    auth_token = auth.create_access_token(AccessToken(user_id=token_data.user_id, user=token_data.user))
-    return RedirectResponse("https://creativitycrop.tech/login")
+    # auth_token = auth.create_access_token(AccessToken(user_id=token_data.user_id, user=token_data.user))
+    return RedirectResponse("https://creativitycrop.tech/login?email_verified=true")
 
 
 @router.post("/request-password-reset", response_model=PasswordResetResponse)
