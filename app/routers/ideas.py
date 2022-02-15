@@ -1,24 +1,19 @@
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, Depends
 import mysql.connector
-import threading
-import hashlib
 
 from app.config import *
-from app import authentication as auth
-from app.worker import DatabaseCleanupWorker
+from app.dependencies import get_token_data
+from app.functions import verify_idea_id, calculate_idea_id
 from app.models.user import *
-from app.models.idea import PostIdea
+from app.models.idea import IdeaPost, IdeaPartial, IdeaFile, IdeaFull, IdeaSmall
 from app.models.token import AccessToken
 from app.models.errors import *
-
+from app.responses.ideas import IdeasList, IdeasHottest, Like
 
 router = APIRouter(
     prefix="/ideas",
     tags=["ideas"]
 )
-
-worker = None
-worker_instance = DatabaseCleanupWorker()
 
 db = mysql.connector.connect()
 
@@ -43,26 +38,10 @@ async def startup_event():
     )
     # This makes it work without having to commit after every query
     db.autocommit = True
-    # Create a worker
-    # global worker
-    # worker = threading.Thread(target=worker_instance.cleanup_database(), args=())
 
 
-@router.get("/get")
+@router.get("/get", response_model=IdeasList)
 async def get_ideas(page: Optional[int] = 0, cat: Optional[str] = None):
-    # Worker to clean up database
-    # global worker
-    # global worker_instance
-    # if worker_instance.worker_next_run == datetime(1970, 1, 1):
-    #     print("First run for worker")
-    #     worker.start()
-    # elif worker.is_alive() is False and datetime.now() > worker_instance.worker_next_run:
-    #     print("Worker has died and it is time to start again")
-    #     worker = threading.Thread(target=worker_instance.cleanup_database(), args=())
-    #     worker.start()
-    # else:
-    #    # print("No starting lol")
-
     is_db_up()
     cursor = db.cursor(dictionary=True)
 
@@ -81,7 +60,7 @@ async def get_ideas(page: Optional[int] = 0, cat: Optional[str] = None):
 
     # Check if there are results, don't waste time to continue if not
     if len(results) == 0:
-        return {"countLeft": 0, "ideas": []}
+        return IdeasList(countLeft=0, ideas=list())
 
     # Get categories in ia neat array
     for result in results:
@@ -104,20 +83,29 @@ async def get_ideas(page: Optional[int] = 0, cat: Optional[str] = None):
 
     cursor.close()
 
-    return {
-        "countLeft": ideas_left,
-        "ideas": results
-    }
+    return IdeasList(
+        countLeft=ideas_left,
+        ideas=list(map(lambda idea: IdeaPartial(
+            id=idea["id"],
+            sellerID=idea["seller_id"],
+            title=idea["title"],
+            likes=idea["likes"],
+            imageURL=idea["image_url"],
+            shortDesc=idea["short_desc"],
+            datePublish=idea["date_publish"],
+            dateExpiry=idea["date_expiry"],
+            categories=idea["categories"],
+            price=idea["price"]
+        ), results))
+    )
 
 
-@router.get("/get/{idea_id}")
-async def get_idea_by_id(idea_id: str, token: str = Header(None, convert_underscores=False)):
-    access_token = auth.verify_access_token(token)
+@router.get("/get/{idea_id}", response_model=IdeaFull)
+async def get_idea_by_id(idea_id: str, token_data: AccessToken = Depends(get_token_data)):
     # This checks if idea id is in the right format, i.e. MD5 hash
-    if len(idea_id) != len(hashlib.md5().hexdigest()):
-        raise IdeaIDInvalidError
-
+    verify_idea_id(idea_id)
     is_db_up()
+
     cursor = db.cursor(dictionary=True)
     query = "SELECT ideas.*, " \
             "(SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id) AS likes, " \
@@ -131,24 +119,47 @@ async def get_idea_by_id(idea_id: str, token: str = Header(None, convert_undersc
             "msg": "The idea was not found",
             "errno": 202
         })
-    if result["buyer_id"] is not None and result["buyer_id"] is not access_token.user_id:
+    if result["buyer_id"] is not None and result["buyer_id"] is not token_data.user_id:
         raise IdeaAccessDeniedError
     # Fetch categories separately cos they are in different table
     cursor.execute("SELECT category FROM ideas_categories WHERE idea_id=%s", (result["id"],))
     result["categories"] = list(map(lambda x: x["category"], cursor.fetchall()))
     # Check if the user is the owner of the idea, then fetch the files
-    if result["buyer_id"] != access_token.user_id:
+    if result["buyer_id"] != token_data.user_id:
         del result["long_desc"]
     else:
         cursor.execute("SELECT * FROM files WHERE idea_id=%s AND idea_id!=id", (result["id"],))
         result["files"] = list(cursor.fetchall())
-    # print(result)
     cursor.close()
 
-    return result
+    return IdeaFull(
+        id=result["id"],
+        sellerID=result["seller_id"],
+        buyerID=result["buyer_id"],
+        title=result["title"],
+        imageURL=result["image_url"],
+        likes=result["likes"],
+        shortDesc=result["short_desc"],
+        longDesc=result["long_desc"] if 'long_desc' in result else None,
+        files=list(map(lambda file: IdeaFile(
+            id=file["id"],
+            ideaID=file["idea_id"],
+            name=file["name"],
+            size=file["size"],
+            absolutePath=file["absolute_path"],
+            publicPath=file["public_path"],
+            contentType=file["content_type"],
+            uploadDate=file["upload_date"]
+        ), result["files"])) if 'long_desc' in result else None,
+        categories=result["categories"],
+        price=result["price"],
+        datePublish=result["date_publish"],
+        dateExpiry=result["date_expiry"],
+        dateBought=result["date_bought"]
+    )
 
 
-@router.get("/get-hottest")
+@router.get("/get-hottest", response_model=IdeasHottest)
 def get_hottest_ideas():
     is_db_up()
     cursor = db.cursor(dictionary=True)
@@ -159,14 +170,19 @@ def get_hottest_ideas():
     cursor.execute(query)
     results = cursor.fetchall()
     cursor.close()
-    return results
+    return IdeasHottest(
+        ideas=list(map(lambda idea: IdeaSmall(
+            id=idea["id"],
+            title=idea["title"],
+            imageURL=idea["image_url"],
+            likes=idea["likes"]
+        ), results))
+    )
 
 
 @router.post("/post")
-async def post_idea(idea: PostIdea, token: str = Header(None, convert_underscores=False)):
-    token_data: AccessToken = auth.verify_access_token(token)
-
-    idea_id = hashlib.md5(idea.long_desc.encode()).hexdigest()
+async def post_idea(idea: IdeaPost, token_data: AccessToken = Depends(get_token_data)):
+    idea_id = calculate_idea_id(idea.long_desc)
     is_db_up()
     cursor = db.cursor()
     query = "INSERT INTO ideas(id, seller_id, title, short_desc, long_desc, " \
@@ -177,43 +193,46 @@ async def post_idea(idea: PostIdea, token: str = Header(None, convert_underscore
         cursor.execute(query, data)
         for category in idea.categories:
             cursor.execute("INSERT INTO ideas_categories(idea_id, category) VALUES(%s, %s)", (idea_id, category))
-    except mysql.errors.IntegrityError as ex:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ex.__dict__)
+    except mysql.connector.errors.IntegrityError as ex:
+        field = ex.msg.split()[5]
+        if field == "'id'":
+            raise IdeaDuplicationError
+        else:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ex.__dict__)
 
     cursor.close()
     return idea_id
 
 
-@router.put("/like")
-async def like_idea(idea_id: str, token: str = Header(None, convert_underscores=False)):
-    token_data = auth.verify_access_token(token)
-
+@router.put("/like", response_model=Like)
+async def like_idea(idea_id: str, token_data: AccessToken = Depends(get_token_data)):
     # This checks if idea id is in the right format, i.e. MD5 hash
-    if len(idea_id) != len(hashlib.md5().hexdigest()):
-        raise IdeaIDInvalidError
+    verify_idea_id(idea_id)
 
     is_db_up()
     cursor = db.cursor(dictionary=True)
     # Try to insert a like row in the table, if a duplication error is thrown, delete the like
     try:
         cursor.execute("INSERT INTO ideas_likes(idea_id, user_id) VALUES(%s, %s)", (idea_id, token_data.user_id))
+        is_liked = True
     except mysql.connector.IntegrityError:
         cursor.execute("DELETE FROM ideas_likes WHERE idea_id = %s AND user_id = %s", (idea_id, token_data.user_id))
+        is_liked = False
     # Get the number of likes
     query = "SELECT " \
-            "COUNT(*) AS likes, " \
+            "COUNT(*) AS likes_count, " \
             "((SELECT COUNT(*) FROM ideas_likes WHERE idea_id=%s AND user_id=%s) = 1) AS is_liked " \
             "FROM ideas_likes WHERE idea_id = %s"
     cursor.execute(query, (idea_id, token_data.user_id, idea_id))
-    likes = cursor.fetchone()
+    result = cursor.fetchone()
     cursor.close()
-    if likes is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={
-            "msg": "The idea was not found",
-            "errno": 202
-        })
+    if result is None:
+        raise IdeaNotFoundError
 
-    return likes
+    return Like(
+        isLiked=is_liked,
+        count=result["likes_count"]
+    )
 
 
 @router.on_event("shutdown")

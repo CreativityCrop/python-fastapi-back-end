@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Header, File, UploadFile, Form
+from fastapi import APIRouter, File, UploadFile, Form, Depends
 import mysql.connector
 import stripe
 import aiofiles as aiofiles
@@ -6,6 +6,8 @@ import hashlib
 
 from app.config import *
 import app.authentication as auth
+from app.dependencies import get_token_data
+from app.functions import verify_idea_id
 from app.models.idea import IdeaFile
 from app.models.token import AccessToken
 from app.models.errors import *
@@ -45,8 +47,7 @@ async def startup_event():
 
 
 @router.get("", response_model=AccountData)
-async def get_account(token: str = Header(None, convert_underscores=False)):
-    token_data: AccessToken = auth.verify_access_token(token)
+async def get_account(token_data: AccessToken = Depends(get_token_data)):
     is_db_up()
     cursor = db.cursor(dictionary=True)
     query = "SELECT " \
@@ -98,10 +99,9 @@ async def get_account(token: str = Header(None, convert_underscores=False)):
 
 
 @router.put("")
-async def update_account(avatar: Optional[UploadFile] = File(None), username: str = Form(None), email: str = Form(None),
-                         pass_hash: str = Form(None), token: str = Header(None, convert_underscores=False)):
-    token_data = auth.verify_access_token(token)
-
+async def update_account(avatar: Optional[UploadFile] = File(None),
+                         username: str = Form(None), email: str = Form(None), iban: str = Form(None),
+                         pass_hash: str = Form(None), token_data: AccessToken = Depends(get_token_data)):
     is_db_up()
     cursor = db.cursor(dictionary=True)
     result = {"status": "none changed"}
@@ -112,7 +112,7 @@ async def update_account(avatar: Optional[UploadFile] = File(None), username: st
         async with aiofiles.open(f'{CDN_FILES_PATH + "accounts/" + avatar.filename}',
                                  "wb") as directory:
             await directory.write(temp)
-        file_id = hashlib.md5(temp).hexdigest()
+        file_id = hashlib.sha256(temp).hexdigest()
         cursor.execute("INSERT INTO files(id, name, size, absolute_path, public_path, content_type)"
                        "VALUES(%s, %s, %s, %s, %s, %s)",
                        (file_id, avatar.filename, avatar.spool_max_size,
@@ -126,6 +126,9 @@ async def update_account(avatar: Optional[UploadFile] = File(None), username: st
         result = {"token": auth.create_access_token(AccessToken(user_id=token_data.user_id, user=token_data.user))}
     if email is not None:
         cursor.execute("UPDATE users SET email=%s WHERE id=%s", (email, token_data.user_id))
+        result = {"status": "success"}
+    if iban is not None:
+        cursor.execute("UPDATE users SET iban=%s WHERE id=%s", (iban, token_data.user_id))
         result = {"status": "success"}
     if pass_hash is not None:
         salt = auth.generate_salt()
@@ -141,10 +144,8 @@ async def update_account(avatar: Optional[UploadFile] = File(None), username: st
 
 
 @router.get("/ideas/bought")
-async def get_ideas_bought_by_user(page: Optional[int] = 0, token: str = Header(None, convert_underscores=False)):
+async def get_ideas_bought_by_user(page: Optional[int] = 0, token_data: AccessToken = Depends(get_token_data)):
     load_count = 5
-    token_data: AccessToken = auth.verify_access_token(token)
-
     is_db_up()
     cursor = db.cursor(dictionary=True)
     query = "SELECT ideas.*, " \
@@ -207,9 +208,8 @@ async def get_ideas_bought_by_user(page: Optional[int] = 0, token: str = Header(
 
 
 @router.get("/ideas/sold")
-async def get_ideas_bought_by_user(page: Optional[int] = 0, token: str = Header(None, convert_underscores=False)):
+async def get_ideas_bought_by_user(page: Optional[int] = 0, token_data: AccessToken = Depends(get_token_data)):
     load_count = 5
-    token_data: AccessToken = auth.verify_access_token(token)
 
     is_db_up()
     cursor = db.cursor(dictionary=True)
@@ -258,16 +258,59 @@ async def get_ideas_bought_by_user(page: Optional[int] = 0, token: str = Header(
 
 
 @router.put("/request-payout")
-async def request_payout(idea_id: str, token: str = Header(None, convert_underscores=False)):
-    auth.verify_access_token(token)
-    if len(idea_id) != len(hashlib.md5().hexdigest()):
-        raise IdeaIDInvalidError
+async def request_payout(idea_id: str, _: AccessToken = Depends(get_token_data)):
+    verify_idea_id(idea_id)
 
     cursor = db.cursor(dictionary=True)
     cursor.execute("UPDATE payouts SET status='processing', date=CURRENT_TIMESTAMP() WHERE idea_id=%s", (idea_id,))
     cursor.close()
 
     return {"payoutStatus": "processing"}
+
+
+@router.get("/invoice/{idea_id}")
+async def get_invoice(idea_id: str, token_data: AccessToken = Depends(get_token_data)):
+    is_db_up()
+    cursor = db.cursor(dictionary=True)
+    cursor.execute("SELECT payments.date, payments.status, payments.idea_id, "
+                   "ideas.seller_id, ideas.buyer_id, ideas.title, ideas.short_desc, ideas.price, "
+                   "CONCAT(users.first_name,' ',users.last_name) as name "
+                   "FROM payments "
+                   "LEFT JOIN ideas ON payments.idea_id=ideas.id "
+                   "LEFT JOIN users ON payments.user_id=users.id "
+                   "WHERE payments.idea_id=%s", (idea_id, ))
+    result = cursor.fetchone()
+    if result is None:
+        # TODO: add exception
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={})
+    if result["status"] != "succeeded":
+        # TODO: add exception
+        return
+    if result["buyer_id"] != token_data.user_id:
+        if result["seller_id"] != token_data.user_id:
+            # TODO: Add exception
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail={})
+        else:
+            return Invoice(
+                id=result["idea_id"],
+                date=result["date"],
+                userName=result["name"],
+                userType="seller",
+                ideaID=result["idea_id"],
+                ideaTitle=result["title"],
+                ideaPrice=result["price"]
+            )
+    else:
+        return Invoice(
+            id=result["idea_id"],
+            date=result["date"],
+            userName=result["name"],
+            userType="buyer",
+            ideaID=result["idea_id"],
+            ideaTitle=result["title"],
+            ideaShortDesc=result["short_desc"],
+            ideaPrice=result["price"]
+        )
 
 
 @router.on_event("shutdown")

@@ -14,7 +14,7 @@ class AccountData(BaseModel):
     username:  str
     dateRegister: datetime
     dateLogin: datetime
-    avatarURL: str
+    avatarURL: Optional[str]
     unfinishedPaymentIntent: Optional[str]
     unfinishedPaymentIdeaID: Optional[str]
     unfinishedPaymentIdeaTitle: Optional[str]
@@ -32,3 +32,14 @@ class BoughtIdeas(BaseModel):
 class SoldIdeas(BaseModel):
     countLeft: int
     ideas: List[SoldIdea]
+
+
+class Invoice(BaseModel):
+    id: str
+    date: datetime
+    userName: str
+    userType: str
+    ideaID: str
+    ideaTitle: str
+    ideaShortDesc: Optional[str]
+    ideaPrice: str
