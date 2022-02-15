@@ -1,11 +1,13 @@
-from fastapi import APIRouter, Header, Request
+from fastapi import APIRouter, Request, Depends
 import stripe
-import hashlib
 import mysql.connector
 
 from app.config import *
-import app.authentication as auth
+from app.dependencies import get_token_data
+from app.functions import verify_idea_id
 from app.models.errors import *
+from app.models.token import AccessToken
+from app.responses.payment import ClientSecret
 
 router = APIRouter(
     prefix="/payment",
@@ -39,12 +41,10 @@ async def startup_event():
     db.autocommit = True
 
 
-@router.get("/create")
-async def create_payment(idea_id: str, token: str = Header(None, convert_underscores=False)):
-    token_data = auth.verify_access_token(token)
+@router.get("/create", response_model=ClientSecret)
+async def create_payment(idea_id: str, token_data: AccessToken = Depends(get_token_data)):
     # Check if idea id is valid MD5 hash
-    if len(idea_id) != len(hashlib.md5().hexdigest()):
-        raise IdeaIDInvalidError
+    verify_idea_id(idea_id)
 
     is_db_up()
     cursor = db.cursor(dictionary=True)
@@ -56,15 +56,9 @@ async def create_payment(idea_id: str, token: str = Header(None, convert_undersc
                    )
     check = cursor.fetchone()
     if check["idea_count"] != 0:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={
-            "msg": "This idea is already sold or in process of buying!",
-            "errno": "new one pls"
-        })
+        raise IdeaBusyError
     if check["user_count"] != 0:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={
-            "msg": "Finish the previous payment and then start a new one!",
-            "errno": "new one again"
-        })
+        raise UnresolvedPaymentExistsError
 
     cursor.execute("SELECT ideas.price, ideas.title, ideas.seller_id, ideas.buyer_id, users.id AS user_id, users.email "
                    "FROM ideas, users "
@@ -74,10 +68,7 @@ async def create_payment(idea_id: str, token: str = Header(None, convert_undersc
     if idea is None:
         raise IdeaNotFoundError
     if idea["buyer_id"] is not None:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail={
-            "msg": "The idea has been already sold",
-            "errno": "MAKE A NEW ONE"
-        })
+        raise IdeaAlreadySoldError
     intent = stripe.PaymentIntent.create(
         amount=int(idea["price"] * 100),
         # customer=result["id"],
@@ -97,23 +88,35 @@ async def create_payment(idea_id: str, token: str = Header(None, convert_undersc
     # Make the buyer_id -1 to stop it from appearing in the list of ideas for sale
     cursor.execute("UPDATE ideas SET buyer_id=-1 WHERE id=%s", (idea_id,))
     cursor.close()
-    return {
-        "clientSecret": intent["client_secret"]
-    }
+    return ClientSecret(
+        clientSecret=intent["client_secret"]
+    )
 
 
 @router.delete("/cancel")
-async def delete_payment(intent_id: str):
+async def delete_payment(idea_id: str, _: AccessToken = Depends(get_token_data)):
+    verify_idea_id(idea_id)
+    is_db_up()
+    cursor = db.cursor(dictionary=True)
+    cursor.execute("SELECT * FROM payments WHERE idea_id=%s", (idea_id,))
+    payment = cursor.fetchone()
+
+    if payment is None:
+        raise PaymentNotFound
+
     stripe.PaymentIntent.cancel(
-        stripe.PaymentIntent(intent_id)
+        stripe.PaymentIntent(payment["id"])
     )
-    return stripe.PaymentIntent.list()
+    cursor.execute("DELETE FROM payments WHERE idea_id=%s", (idea_id,))
+    cursor.execute("UPDATE ideas SET buyer_id=NULL WHERE id=%s", (idea_id,))
+
+    cursor.close()
+
+    return {"status": "success"}
 
 
-@router.get("/get")
-def get_payment(token: str = Header(None, convert_underscores=False)):
-    token_data = auth.verify_access_token(token)
-
+@router.get("/get", response_model=ClientSecret)
+def get_payment(token_data: AccessToken = Depends(get_token_data)):
     is_db_up()
     cursor = db.cursor(dictionary=True)
     cursor.execute("SELECT id FROM payments WHERE user_id=%s", (token_data.user_id,))
@@ -127,7 +130,9 @@ def get_payment(token: str = Header(None, convert_underscores=False)):
 
     cursor.close()
 
-    return intent["client_secret"]
+    return ClientSecret(
+        clientSecret=intent["client_secret"]
+    )
 
 
 @router.post('/webhook')

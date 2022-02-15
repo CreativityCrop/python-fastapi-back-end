@@ -46,14 +46,20 @@ async def register_user(user: UserRegister):
     salt = auth.generate_salt()
     is_db_up()
     cursor = db.cursor()
-    query = "INSERT INTO users(first_name, last_name, email, username, salt, pass_hash, date_register) " \
-            "VALUES(%s, %s, %s, %s, %s, %s, %s)"
-    data = (user.first_name, user.last_name, user.email, user.username,
+    query = "INSERT INTO users(first_name, last_name, email, iban, username, salt, pass_hash, date_register) " \
+            "VALUES(%s, %s, %s, %s, %s, %s, %s, %s)"
+    data = (user.first_name, user.last_name, user.email, user.iban, user.username,
             salt, auth.hash_password(user.pass_hash, salt), datetime.now().isoformat())
     try:
         cursor.execute(query, data)
     except mysql.connector.errors.IntegrityError as ex:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ex.__dict__)
+        field = ex.msg.split()[5]
+        if field == "'email'":
+            raise EmailDuplicateError
+        if field == "'username'":
+            raise UsernameDuplicateError
+        else:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ex.__dict__)
     user_id = cursor.lastrowid
     cursor.close()
 
@@ -90,7 +96,7 @@ async def login_user(user: UserLogin):
     if result is None:
         raise UserNotFoundError
     if result["verified"] == 0:
-        raise UserNotVerified
+        raise UserNotVerifiedError
     if not auth.verify_password(user.pass_hash, result["salt"], result["pass_hash"]):
         raise PasswordIncorrectError
     user_id = result["id"]

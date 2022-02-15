@@ -3,21 +3,6 @@ from typing import Optional, List
 from datetime import datetime
 
 
-class Idea(BaseModel):
-    id: str
-    sellerID: int
-    buyerID: int
-    title: str
-    shortDesc: str
-    imageURL: str
-    likes: int
-    categories: List[str]
-    datePublish: datetime
-    dateExpiry: datetime
-    dateBought: datetime
-    price: float
-
-
 class IdeaFile(BaseModel):
     id: str
     ideaID: str
@@ -29,7 +14,30 @@ class IdeaFile(BaseModel):
     uploadDate: datetime
 
 
-class PostIdea(BaseModel):
+class IdeaSmall(BaseModel):
+    id: str
+    title: str
+    imageURL: Optional[str]
+    likes: int
+
+
+class IdeaPartial(IdeaSmall):
+    sellerID: int
+    shortDesc: str
+    categories: Optional[List[str]]
+    datePublish: datetime
+    dateExpiry: datetime
+    price: float
+
+
+class IdeaFull(IdeaPartial):
+    buyerID: Optional[int]
+    longDesc: Optional[str]
+    files: Optional[List[IdeaFile]]
+    dateBought: Optional[datetime]
+
+
+class IdeaPost(BaseModel):
     title: str
     short_desc: str
     long_desc: str
@@ -37,16 +45,15 @@ class PostIdea(BaseModel):
     price: float
 
 
-class BoughtIdea(Idea):
-    longDesc: str
-    files: List[IdeaFile]
+class BoughtIdea(IdeaFull):
+    pass
 
 
 class SoldIdea(BaseModel):
     id: str
     sellerID: int
     title: str
-    imageURL: str
+    imageURL: Optional[str]
     likes: int
     datePublish: datetime
     dateBought: datetime

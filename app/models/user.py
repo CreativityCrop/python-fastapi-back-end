@@ -19,7 +19,9 @@ class UserRegister(BaseModel):
     first_name: str
     last_name: str
     email: EmailStr
+    iban: str
     username: str
+    iban: str
     pass_hash: str
 
 
