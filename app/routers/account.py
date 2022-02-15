@@ -1,18 +1,20 @@
-from fastapi import APIRouter, File, UploadFile, Form, Depends
+from fastapi import APIRouter, File, UploadFile, Form, Depends, HTTPException
+from starlette import status
 import mysql.connector
 import stripe
 import aiofiles as aiofiles
 import hashlib
 
-from app.config import *
 import app.authentication as auth
+from app.config import *
 from app.dependencies import get_token_data
+from app.errors.account import InvoiceUnavailableYetError, InvoiceAccessUnauthorizedError
+from app.errors.files import FiletypeNotAllowedError
+from app.errors.ideas import IdeaNotFoundError
 from app.functions import verify_idea_id
 from app.models.idea import IdeaFile
 from app.models.token import AccessToken
-from app.models.errors import *
 from app.responses.account import *
-from app.responses.auth import TokenResponse
 
 router = APIRouter(
     prefix="/account",
@@ -50,8 +52,7 @@ async def startup_event():
 async def get_account(token_data: AccessToken = Depends(get_token_data)):
     is_db_up()
     cursor = db.cursor(dictionary=True)
-    query = "SELECT " \
-            "users.id, users.first_name, users.last_name, email, username, date_register, date_login, " \
+    query = "SELECT users.*, " \
             "files.public_path AS avatar_url, " \
             "payments.id AS unfinished_intent, payments.idea_id AS unfinished_payment_idea, " \
             "ideas.title, ideas.short_desc, ideas.price, " \
@@ -73,6 +74,7 @@ async def get_account(token_data: AccessToken = Depends(get_token_data)):
             firstName=result["first_name"],
             lastName=result["last_name"],
             email=result["email"],
+            iban=result["iban"],
             username=result["username"],
             dateRegister=result["date_register"],
             dateLogin=result["date_login"],
@@ -91,6 +93,7 @@ async def get_account(token_data: AccessToken = Depends(get_token_data)):
         firstName=result["first_name"],
         lastName=result["last_name"],
         email=result["email"],
+        iban=result["iban"],
         username=result["username"],
         dateRegister=result["date_register"],
         dateLogin=result["date_login"],
@@ -98,16 +101,16 @@ async def get_account(token_data: AccessToken = Depends(get_token_data)):
     )
 
 
-@router.put("")
+@router.put("", response_model=AccountUpdate)
 async def update_account(avatar: Optional[UploadFile] = File(None),
                          username: str = Form(None), email: str = Form(None), iban: str = Form(None),
                          pass_hash: str = Form(None), token_data: AccessToken = Depends(get_token_data)):
     is_db_up()
     cursor = db.cursor(dictionary=True)
-    result = {"status": "none changed"}
+    result = AccountUpdate(status="none changed")
     if avatar is not None:
         if avatar.content_type not in CDN_ALLOWED_CONTENT_TYPES:
-            raise HTTPException(status_code=406, detail="File type is not allowed for upload!")
+            raise FiletypeNotAllowedError
         temp = await avatar.read()
         async with aiofiles.open(f'{CDN_FILES_PATH + "accounts/" + avatar.filename}',
                                  "wb") as directory:
@@ -119,25 +122,29 @@ async def update_account(avatar: Optional[UploadFile] = File(None),
                         f'{CDN_FILES_PATH + "accounts/" + avatar.filename}',
                         f'{CDN_URL + "accounts/" + avatar.filename}', avatar.content_type))
         cursor.execute("UPDATE users SET avatar_id=%s WHERE id=%s", (file_id, token_data.user_id))
-        result = {"status": "success"}
+        result = AccountUpdate(status="success")
     if username is not None:
         cursor.execute("UPDATE users SET username=%s WHERE id=%s", (username, token_data.user_id))
         token_data.user = username
-        result = {"token": auth.create_access_token(AccessToken(user_id=token_data.user_id, user=token_data.user))}
+        result = AccountUpdate(
+            status="success",
+            token=auth.create_access_token(AccessToken(user_id=token_data.user_id, user=token_data.user))
+        )
     if email is not None:
         cursor.execute("UPDATE users SET email=%s WHERE id=%s", (email, token_data.user_id))
-        result = {"status": "success"}
+        result = AccountUpdate(status="success")
     if iban is not None:
         cursor.execute("UPDATE users SET iban=%s WHERE id=%s", (iban, token_data.user_id))
-        result = {"status": "success"}
+        result = AccountUpdate(status="success")
     if pass_hash is not None:
         salt = auth.generate_salt()
         cursor.execute(
             "UPDATE users SET salt=%s, pass_hash=%s WHERE id=%s",
             (salt, auth.hash_password(pass_hash, salt), token_data.user_id)
         )
-        result = TokenResponse(
-            accessToken=auth.create_access_token(AccessToken(user_id=token_data.user_id, user=token_data.user))
+        result = AccountUpdate(
+            status="success",
+            token=auth.create_access_token(AccessToken(user_id=token_data.user_id, user=token_data.user))
         )
     cursor.close()
     return result
@@ -257,7 +264,7 @@ async def get_ideas_bought_by_user(page: Optional[int] = 0, token_data: AccessTo
     )
 
 
-@router.put("/request-payout")
+@router.put("/request-payout", response_model=PayoutRequest)
 async def request_payout(idea_id: str, _: AccessToken = Depends(get_token_data)):
     verify_idea_id(idea_id)
 
@@ -265,7 +272,7 @@ async def request_payout(idea_id: str, _: AccessToken = Depends(get_token_data))
     cursor.execute("UPDATE payouts SET status='processing', date=CURRENT_TIMESTAMP() WHERE idea_id=%s", (idea_id,))
     cursor.close()
 
-    return {"payoutStatus": "processing"}
+    return PayoutRequest(status="processing")
 
 
 @router.get("/invoice/{idea_id}")
@@ -281,15 +288,12 @@ async def get_invoice(idea_id: str, token_data: AccessToken = Depends(get_token_
                    "WHERE payments.idea_id=%s", (idea_id, ))
     result = cursor.fetchone()
     if result is None:
-        # TODO: add exception
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={})
+        raise IdeaNotFoundError
     if result["status"] != "succeeded":
-        # TODO: add exception
-        return
+        raise InvoiceUnavailableYetError
     if result["buyer_id"] != token_data.user_id:
         if result["seller_id"] != token_data.user_id:
-            # TODO: Add exception
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail={})
+            raise InvoiceAccessUnauthorizedError
         else:
             return Invoice(
                 id=result["idea_id"],

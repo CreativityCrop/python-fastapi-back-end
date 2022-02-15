@@ -1,15 +1,16 @@
 from fastapi import APIRouter, Header
+from fastapi.responses import RedirectResponse
 import mysql.connector
 import requests
 import json
 from datetime import datetime
 
-from app.config import *
+from app.config import DB_USER, DB_PASS, DB_NAME, DB_HOST, MAILGUN_API_KEY
 from app import authentication as auth
 from app.models.user import UserRegister, UserLogin, UserPasswordReset, UserPasswordUpdate
 from app.models.token import AccessToken, EmailVerifyToken, PasswordResetToken
-from app.models.errors import *
-from app.responses.auth import TokenResponse
+from app.errors.auth import *
+from app.responses.auth import TokenResponse, PasswordResetResponse
 
 router = APIRouter(
     prefix="/auth",
@@ -114,7 +115,7 @@ def verify_token(token: str = Header(None, convert_underscores=False)):
     return auth.verify_access_token(token)
 
 
-@router.get("/verify-email", response_model=TokenResponse)
+@router.get("/verify-email", response_class=RedirectResponse)
 async def verify_email_account(token: str):
     is_db_up()
     token_data = auth.verify_email_verify_token(token)
@@ -122,10 +123,10 @@ async def verify_email_account(token: str):
     cursor.execute("UPDATE users SET verified=TRUE WHERE email=%s", (token_data.email,))
     cursor.close()
     auth_token = auth.create_access_token(AccessToken(user_id=token_data.user_id, user=token_data.user))
-    return TokenResponse(accessToken=auth_token)
+    return RedirectResponse("https://creativitycrop.tech/login")
 
 
-@router.post("/request-password-reset")
+@router.post("/request-password-reset", response_model=PasswordResetResponse)
 async def request_password_reset(email: UserPasswordReset):
     is_db_up()
     cursor = db.cursor(dictionary=True)
@@ -135,7 +136,7 @@ async def request_password_reset(email: UserPasswordReset):
     )
     user = cursor.fetchone()
     if user is None:
-        return ':('
+        raise EmailNotFoundError
     password_reset_token = auth.create_password_reset_token(
         PasswordResetToken(user_id=user["id"], user=user["name"], email=user["email"])
     )
@@ -156,7 +157,7 @@ async def request_password_reset(email: UserPasswordReset):
     )
     cursor.close()
 
-    return ':)'
+    return PasswordResetResponse(status="success")
 
 
 @router.put("/password-reset", response_model=TokenResponse)
@@ -166,14 +167,11 @@ async def password_reset(new_data: UserPasswordUpdate, token: str = Header(None,
 
     is_db_up()
     cursor = db.cursor(dictionary=True)
-    try:
-        cursor.execute(
-            "UPDATE users SET salt=%s, pass_hash=%s WHERE id=%s",
-            (salt, auth.hash_password(new_data.pass_hash, salt), token_data.user_id,)
-        )
-    except mysql.connector.errors.Error as ex:
-        cursor.close()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"msg": ex.__dict__})
+
+    cursor.execute(
+        "UPDATE users SET salt=%s, pass_hash=%s WHERE id=%s",
+        (salt, auth.hash_password(new_data.pass_hash, salt), token_data.user_id,)
+    )
     access_token = auth.create_access_token(AccessToken(user_id=token_data.user_id, user=token_data.user))
     cursor.close()
 

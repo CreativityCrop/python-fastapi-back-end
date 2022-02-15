@@ -2,10 +2,11 @@ from fastapi import APIRouter, Request, Depends
 import stripe
 import mysql.connector
 
-from app.config import *
+from app.config import DB_HOST, DB_NAME, DB_PASS, DB_USER, STRIPE_API_KEY, STRIPE_WEBHOOK_SECRET
 from app.dependencies import get_token_data
 from app.functions import verify_idea_id
-from app.models.errors import *
+from app.errors.payment import *
+from app.errors.ideas import IdeaNotFoundError
 from app.models.token import AccessToken
 from app.responses.payment import ClientSecret
 

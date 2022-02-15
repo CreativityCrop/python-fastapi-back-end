@@ -1,13 +1,14 @@
 from fastapi import APIRouter, Depends
 import mysql.connector
+from datetime import datetime
+from typing import Optional
 
-from app.config import *
+from app.config import DB_HOST, DB_USER, DB_PASS, DB_NAME, IDEA_EXPIRES_AFTER
 from app.dependencies import get_token_data
 from app.functions import verify_idea_id, calculate_idea_id
-from app.models.user import *
 from app.models.idea import IdeaPost, IdeaPartial, IdeaFile, IdeaFull, IdeaSmall
 from app.models.token import AccessToken
-from app.models.errors import *
+from app.errors.ideas import *
 from app.responses.ideas import IdeasList, IdeasHottest, Like
 
 router = APIRouter(
