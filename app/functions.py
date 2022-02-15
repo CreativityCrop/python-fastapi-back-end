@@ -1,6 +1,6 @@
 import hashlib
 
-from app.models.errors import IdeaIDInvalidError
+from app.errors.ideas import IdeaIDInvalidError
 
 
 def calculate_idea_id(data: str) -> str:

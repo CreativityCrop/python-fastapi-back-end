@@ -1,9 +1,9 @@
-
 from pydantic import BaseModel, EmailStr
 from typing import Optional, List
 from datetime import datetime
 
 from app.models.idea import BoughtIdea, SoldIdea
+from app.responses.auth import TokenResponse
 
 
 class AccountData(BaseModel):
@@ -11,6 +11,7 @@ class AccountData(BaseModel):
     firstName: str
     lastName: str
     email: EmailStr
+    iban: Optional[str]
     username:  str
     dateRegister: datetime
     dateLogin: datetime
@@ -24,6 +25,11 @@ class AccountData(BaseModel):
     unfinishedPaymentIntentSecret: Optional[str]
 
 
+class AccountUpdate(BaseModel):
+    status: str
+    token: Optional[TokenResponse]
+
+
 class BoughtIdeas(BaseModel):
     countLeft: int
     ideas: List[BoughtIdea]
@@ -32,6 +38,10 @@ class BoughtIdeas(BaseModel):
 class SoldIdeas(BaseModel):
     countLeft: int
     ideas: List[SoldIdea]
+
+
+class PayoutRequest(BaseModel):
+    status: str
 
 
 class Invoice(BaseModel):

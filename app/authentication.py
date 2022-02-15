@@ -1,14 +1,10 @@
+from jose import JWTError, jwt, ExpiredSignatureError
+import bcrypt
+from passlib.context import CryptContext
 from datetime import datetime
 
-from fastapi import HTTPException
-from passlib.context import CryptContext
-from starlette import status
-
-import bcrypt
-from jose import JWTError, jwt
-
 from app.config import *
-from app.models.errors import TokenInvalidError
+from app.errors.auth import TokenInvalidError, TokenNullError, AccessTokenExpiredError
 from app.models.token import *
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -34,10 +30,14 @@ def create_access_token(data: AccessToken):
 
 
 def verify_access_token(token: str) -> AccessToken:
+    if token is None or token == "":
+        raise TokenNullError
     try:
         payload = jwt.decode(token, str(JWT_AUTH_SECRET_KEY), algorithms=[JWT_ALGORITHM])
-    except JWTError as ex:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail={"msg": ex.__str__(), "errno": 103})
+    except ExpiredSignatureError:
+        raise AccessTokenExpiredError
+    except JWTError:
+        raise TokenInvalidError
     except AttributeError:
         raise TokenInvalidError
     return AccessToken.parse_obj(payload)
@@ -50,10 +50,14 @@ def create_email_verify_token(data: EmailVerifyToken) -> str:
 
 
 def verify_email_verify_token(token: str) -> EmailVerifyToken:
+    if token is None or token == "":
+        raise TokenNullError
     try:
         payload = jwt.decode(token, str(JWT_EMAIL_VERIFY_SECRET_KEY), algorithms=[JWT_ALGORITHM])
-    except JWTError as ex:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail={"msg": ex.__str__(), "errno": 103})
+    except ExpiredSignatureError:
+        raise EmailVerifyToken
+    except JWTError:
+        raise TokenInvalidError
     except AttributeError:
         raise TokenInvalidError
     return EmailVerifyToken.parse_obj(payload)
@@ -66,10 +70,14 @@ def create_password_reset_token(data: PasswordResetToken) -> str:
 
 
 def verify_password_reset_token(token: str) -> PasswordResetToken:
+    if token is None or token == "":
+        raise TokenNullError
     try:
         payload = jwt.decode(token, str(JWT_PASSWORD_RESET_SECRET_KEY), algorithms=[JWT_ALGORITHM])
-    except JWTError as ex:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail={"msg": ex.__str__(), "errno": 103})
+    except ExpiredSignatureError:
+        raise PasswordResetToken
+    except JWTError:
+        raise TokenInvalidError
     except AttributeError:
         raise TokenInvalidError
     return PasswordResetToken.parse_obj(payload)
