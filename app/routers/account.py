@@ -8,7 +8,7 @@ import hashlib
 import app.authentication as auth
 from app.config import *
 from app.dependencies import get_token_data
-from app.errors.account import InvoiceUnavailableYetError, InvoiceAccessUnauthorizedError
+from app.errors.account import InvoiceUnavailableYetError, InvoiceAccessUnauthorizedError, InvoiceNotFoundError
 from app.errors.files import FiletypeNotAllowedError
 from app.errors.ideas import IdeaNotFoundError
 from app.functions import verify_idea_id
@@ -288,7 +288,7 @@ async def get_invoice(idea_id: str, token_data: AccessToken = Depends(get_token_
                    "WHERE payments.idea_id=%s", (idea_id, ))
     result = cursor.fetchone()
     if result is None:
-        raise IdeaNotFoundError
+        raise InvoiceNotFoundError
     if result["status"] != "succeeded":
         raise InvoiceUnavailableYetError
     if result["buyer_id"] != token_data.user_id:

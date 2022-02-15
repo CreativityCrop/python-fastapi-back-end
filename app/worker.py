@@ -10,6 +10,7 @@ stripe.api_key = 'sk_test_51Jx4d2Ldhfi7be41P1vPbJ4zd47yIWOii662BD9HIqUK14y3N8p57
                  'Yg300EhrWWoMB'
 
 
+# TODO: Add user cleanup
 def cleanup_database():
     print("Starting DB cleanup process")
 
