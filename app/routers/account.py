@@ -10,7 +10,6 @@ from app.config import *
 from app.dependencies import get_token_data
 from app.errors.account import InvoiceUnavailableYetError, InvoiceAccessUnauthorizedError, InvoiceNotFoundError
 from app.errors.files import FiletypeNotAllowedError
-from app.errors.ideas import IdeaNotFoundError
 from app.functions import verify_idea_id
 from app.models.idea import IdeaFile
 from app.models.token import AccessToken
@@ -168,6 +167,8 @@ async def get_ideas_bought_by_user(page: Optional[int] = 0, token_data: AccessTo
         result["categories"] = list(map(lambda x: x["category"], cursor.fetchall()))
         cursor.execute("SELECT * FROM files WHERE idea_id=%s AND idea_id!=id", (result["id"],))
         result["files"] = list(cursor.fetchall())
+        for file in result["files"]:
+            print(file["name"])
 
     # Find the number of ideas matching the criteria
     query = "SELECT COUNT(*) AS ideas_count " \
@@ -199,16 +200,16 @@ async def get_ideas_bought_by_user(page: Optional[int] = 0, token_data: AccessTo
             dateExpiry=idea["date_expiry"],
             dateBought=idea["date_bought"],
             categories=idea["categories"],
-            files=list(map(lambda file: IdeaFile(
-                id=file["id"],
-                ideaID=file["idea_id"],
-                name=file["name"],
-                size=file["size"],
-                absolutePath=file["absolute_path"],
-                publicPath=file["public_path"],
-                contentType=file["content_type"],
-                uploadDate=file["upload_date"]
-            ), result["files"])),
+            files=list(map(lambda temp_file: IdeaFile(
+                id=temp_file["id"],
+                ideaID=temp_file["idea_id"],
+                name=temp_file["name"],
+                size=temp_file["size"],
+                absolutePath=temp_file["absolute_path"],
+                publicPath=temp_file["public_path"],
+                contentType=temp_file["content_type"],
+                uploadDate=temp_file["upload_date"]
+            ), idea["files"])),
             price=idea["price"]
         ), results))
     )
