@@ -44,11 +44,11 @@ async def startup_event():
 
 @router.post("/register")
 async def register_user(user: UserRegister):
-    salt = auth.generate_salt()
     is_db_up()
     cursor = db.cursor()
     query = "INSERT INTO users(first_name, last_name, email, iban, username, salt, pass_hash, date_register) " \
             "VALUES(%s, %s, %s, %s, %s, %s, %s, %s)"
+    salt = auth.generate_salt()
     data = (user.first_name, user.last_name, user.email, user.iban, user.username,
             salt, auth.hash_password(user.pass_hash, salt), datetime.now().isoformat())
     try:
@@ -84,27 +84,30 @@ async def register_user(user: UserRegister):
         }
     )
 
-    return
+    return {"status": "success"}
 
 
 @router.post("/login", response_model=TokenResponse)
 async def login_user(user: UserLogin):
     is_db_up()
+
     cursor = db.cursor(dictionary=True)
     query = 'SELECT * FROM users WHERE username = %s'
     cursor.execute(query, (user.username,))
     result = cursor.fetchone()
+
     if result is None:
         raise UserNotFoundError
+    # User need to verify the account to login
     if result["verified"] == 0:
         raise UserNotVerifiedError
     if not auth.verify_password(user.pass_hash, result["salt"], result["pass_hash"]):
         raise PasswordIncorrectError
-    user_id = result["id"]
+
     query = "UPDATE users SET date_login = %s WHERE users.username = %s;"
     cursor.execute(query, (datetime.now().isoformat(), user.username))
     access_token = auth.create_access_token(
-        AccessToken(user_id=user_id, user=user.username)
+        AccessToken(user_id=result["id"], user=user.username)
     )
     cursor.close()
     return TokenResponse(accessToken=access_token)
@@ -118,7 +121,9 @@ def verify_token(token: str = Header(None, convert_underscores=False)):
 @router.get("/verify-email", response_class=RedirectResponse)
 async def verify_email_account(token: str):
     is_db_up()
+    # Here token must be a query parameter
     token_data = auth.verify_email_verify_token(token)
+
     cursor = db.cursor(dictionary=True)
     cursor.execute("UPDATE users SET verified=TRUE WHERE email=%s", (token_data.email,))
     cursor.close()
@@ -129,6 +134,7 @@ async def verify_email_account(token: str):
 @router.post("/request-password-reset", response_model=PasswordResetResponse)
 async def request_password_reset(email: UserPasswordReset):
     is_db_up()
+
     cursor = db.cursor(dictionary=True)
     cursor.execute(
         "SELECT id, first_name, CONCAT(first_name, ' ', last_name) AS name, username, email FROM users WHERE email=%s",
@@ -162,12 +168,11 @@ async def request_password_reset(email: UserPasswordReset):
 
 @router.put("/password-reset", response_model=TokenResponse)
 async def password_reset(new_data: UserPasswordUpdate, token: str = Header(None, convert_underscores=False)):
+    is_db_up()
     token_data = auth.verify_password_reset_token(token)
     salt = auth.generate_salt()
 
-    is_db_up()
     cursor = db.cursor(dictionary=True)
-
     cursor.execute(
         "UPDATE users SET salt=%s, pass_hash=%s WHERE id=%s",
         (salt, auth.hash_password(new_data.pass_hash, salt), token_data.user_id,)

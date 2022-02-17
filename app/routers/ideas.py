@@ -44,8 +44,8 @@ async def startup_event():
 @router.get("/get", response_model=IdeasList)
 async def get_ideas(page: Optional[int] = 0, cat: Optional[str] = None):
     is_db_up()
-    cursor = db.cursor(dictionary=True)
 
+    cursor = db.cursor(dictionary=True)
     query = "SELECT " \
             "ideas.id, seller_id, title, short_desc, date_publish, date_expiry, price, " \
             "files.public_path AS image_url," \
@@ -63,7 +63,7 @@ async def get_ideas(page: Optional[int] = 0, cat: Optional[str] = None):
     if len(results) == 0:
         return IdeasList(countLeft=0, ideas=list())
 
-    # Get categories in ia neat array
+    # Get categories
     for result in results:
         cursor.execute("SELECT category FROM ideas_categories WHERE idea_id=%s", (result["id"],))
         result["categories"] = list(map(lambda x: x["category"], cursor.fetchall()))
@@ -103,7 +103,6 @@ async def get_ideas(page: Optional[int] = 0, cat: Optional[str] = None):
 
 @router.get("/get/{idea_id}", response_model=IdeaFull)
 async def get_idea_by_id(idea_id: str, token_data: AccessToken = Depends(get_token_data)):
-    # This checks if idea id is in the right format, i.e. MD5 hash
     verify_idea_id(idea_id)
     is_db_up()
 
@@ -115,22 +114,23 @@ async def get_idea_by_id(idea_id: str, token_data: AccessToken = Depends(get_tok
             "WHERE ideas.id = %s"
     cursor.execute(query, (idea_id,))
     result = cursor.fetchone()
+
     if result is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={
-            "msg": "The idea was not found",
-            "errno": 202
-        })
+        raise IdeaNotFoundError
     if result["buyer_id"] is not None and result["buyer_id"] is not token_data.user_id:
         raise IdeaAccessDeniedError
-    # Fetch categories separately cos they are in different table
+
+    # Get categories
     cursor.execute("SELECT category FROM ideas_categories WHERE idea_id=%s", (result["id"],))
     result["categories"] = list(map(lambda x: x["category"], cursor.fetchall()))
-    # Check if the user is the owner of the idea, then fetch the files
+
+    # Check if the user is the owner of the idea, if so fetch the files, else remove long description
     if result["buyer_id"] != token_data.user_id:
         del result["long_desc"]
     else:
         cursor.execute("SELECT * FROM files WHERE idea_id=%s AND idea_id!=id", (result["id"],))
         result["files"] = list(cursor.fetchall())
+
     cursor.close()
 
     return IdeaFull(
@@ -163,6 +163,7 @@ async def get_idea_by_id(idea_id: str, token_data: AccessToken = Depends(get_tok
 @router.get("/get-hottest", response_model=IdeasHottest)
 def get_hottest_ideas():
     is_db_up()
+
     cursor = db.cursor(dictionary=True)
     query = "SELECT ideas.id, ideas.title, files.public_path AS image_url, " \
             "(SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id) AS likes " \
@@ -170,7 +171,9 @@ def get_hottest_ideas():
             "WHERE buyer_id IS NULL ORDER BY likes DESC LIMIT 5"
     cursor.execute(query)
     results = cursor.fetchall()
+
     cursor.close()
+
     return IdeasHottest(
         ideas=list(map(lambda idea: IdeaSmall(
             id=idea["id"],
@@ -183,8 +186,11 @@ def get_hottest_ideas():
 
 @router.post("/post")
 async def post_idea(idea: IdeaPost, token_data: AccessToken = Depends(get_token_data)):
-    idea_id = calculate_idea_id(idea.long_desc)
     is_db_up()
+
+    # Long description is used for id of the idea, because it needs to be unique
+    idea_id = calculate_idea_id(idea.long_desc)
+
     cursor = db.cursor()
     query = "INSERT INTO ideas(id, seller_id, title, short_desc, long_desc, " \
             "date_publish, date_expiry, price) VALUES(%s, %s, %s, %s, %s, %s, %s, %s)"
@@ -202,15 +208,15 @@ async def post_idea(idea: IdeaPost, token_data: AccessToken = Depends(get_token_
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ex.__dict__)
 
     cursor.close()
+
     return idea_id
 
 
 @router.put("/like", response_model=Like)
 async def like_idea(idea_id: str, token_data: AccessToken = Depends(get_token_data)):
-    # This checks if idea id is in the right format, i.e. MD5 hash
     verify_idea_id(idea_id)
-
     is_db_up()
+
     cursor = db.cursor(dictionary=True)
     # Try to insert a like row in the table, if a duplication error is thrown, delete the like
     try:
@@ -219,6 +225,7 @@ async def like_idea(idea_id: str, token_data: AccessToken = Depends(get_token_da
     except mysql.connector.IntegrityError:
         cursor.execute("DELETE FROM ideas_likes WHERE idea_id = %s AND user_id = %s", (idea_id, token_data.user_id))
         is_liked = False
+
     # Get the number of likes
     query = "SELECT " \
             "COUNT(*) AS likes_count, " \
@@ -227,6 +234,7 @@ async def like_idea(idea_id: str, token_data: AccessToken = Depends(get_token_da
     cursor.execute(query, (idea_id, token_data.user_id, idea_id))
     result = cursor.fetchone()
     cursor.close()
+
     if result is None:
         raise IdeaNotFoundError
 

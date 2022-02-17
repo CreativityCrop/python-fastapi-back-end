@@ -44,7 +44,6 @@ async def startup_event():
 
 @router.get("/create", response_model=ClientSecret)
 async def create_payment(idea_id: str, token_data: AccessToken = Depends(get_token_data)):
-    # Check if idea id is valid MD5 hash
     verify_idea_id(idea_id)
 
     is_db_up()
@@ -56,8 +55,10 @@ async def create_payment(idea_id: str, token_data: AccessToken = Depends(get_tok
                    (idea_id, token_data.user_id)
                    )
     check = cursor.fetchone()
+    # Payment already exists for that idea
     if check["idea_count"] != 0:
         raise IdeaBusyError
+    # User already has an unfinished payment, cannot make another
     if check["user_count"] != 0:
         raise UnresolvedPaymentExistsError
 
@@ -66,13 +67,15 @@ async def create_payment(idea_id: str, token_data: AccessToken = Depends(get_tok
                    "WHERE ideas.id=%s AND users.id=%s",
                    (idea_id, token_data.user_id))
     idea = cursor.fetchone()
+
     if idea is None:
         raise IdeaNotFoundError
+    # Checks if idea is for sale
     if idea["buyer_id"] is not None:
         raise IdeaAlreadySoldError
+
     intent = stripe.PaymentIntent.create(
         amount=int(idea["price"] * 100),
-        # customer=result["id"],
         receipt_email=idea["email"],
         currency="usd",
         description="CreativityCrop - Selling the idea: " + idea["title"],
@@ -98,6 +101,7 @@ async def create_payment(idea_id: str, token_data: AccessToken = Depends(get_tok
 async def delete_payment(idea_id: str, _: AccessToken = Depends(get_token_data)):
     verify_idea_id(idea_id)
     is_db_up()
+
     cursor = db.cursor(dictionary=True)
     cursor.execute("SELECT * FROM payments WHERE idea_id=%s", (idea_id,))
     payment = cursor.fetchone()
@@ -108,6 +112,7 @@ async def delete_payment(idea_id: str, _: AccessToken = Depends(get_token_data))
     stripe.PaymentIntent.cancel(
         stripe.PaymentIntent(payment["id"])
     )
+
     cursor.execute("DELETE FROM payments WHERE idea_id=%s", (idea_id,))
     cursor.execute("UPDATE ideas SET buyer_id=NULL WHERE id=%s", (idea_id,))
 
@@ -119,14 +124,14 @@ async def delete_payment(idea_id: str, _: AccessToken = Depends(get_token_data))
 @router.get("/get", response_model=ClientSecret)
 def get_payment(token_data: AccessToken = Depends(get_token_data)):
     is_db_up()
+
     cursor = db.cursor(dictionary=True)
     cursor.execute("SELECT id FROM payments WHERE user_id=%s", (token_data.user_id,))
     result = cursor.fetchone()
+
     if result is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={
-            "msg": "Payment not found",
-            "errno": "Make up a new one pls"
-        })
+        raise PaymentNotFound
+
     intent = stripe.PaymentIntent.retrieve(result["id"], )
 
     cursor.close()
@@ -136,6 +141,7 @@ def get_payment(token_data: AccessToken = Depends(get_token_data)):
     )
 
 
+# Webhook code provided by Stripe
 @router.post('/webhook')
 async def webhook_received(request: Request):
     sig_header = request.headers.get("stripe-signature")
@@ -145,7 +151,6 @@ async def webhook_received(request: Request):
     except ValueError as ex:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=ex.__dict__)
     except stripe.error.SignatureVerificationError:
-        print("Signature invalid:")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"text": "Invalid signature"})
 
     is_db_up()

@@ -12,3 +12,4 @@ aiofiles
 requests
 python-jose[cryptography]
 python-multipart
+uvicorn[standard]
