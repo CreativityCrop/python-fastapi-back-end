@@ -50,6 +50,7 @@ async def startup_event():
 @router.get("", response_model=AccountData)
 async def get_account(token_data: AccessToken = Depends(get_token_data)):
     is_db_up()
+
     cursor = db.cursor(dictionary=True)
     query = "SELECT users.*, " \
             "files.public_path AS avatar_url, " \
@@ -65,6 +66,8 @@ async def get_account(token_data: AccessToken = Depends(get_token_data)):
     cursor.execute(query, (token_data.user_id,))
     result = cursor.fetchone()
     cursor.close()
+
+    # Checks for unfinished payment
     if result["unfinished_intent"] is not None:
         intent = stripe.PaymentIntent.retrieve(result["unfinished_intent"], )
         result["unfinished_intent_secret"] = intent["client_secret"]
@@ -127,7 +130,9 @@ async def update_account(avatar: Optional[UploadFile] = File(None),
         token_data.user = username
         result = AccountUpdate(
             status="success",
-            token=auth.create_access_token(AccessToken(user_id=token_data.user_id, user=token_data.user))
+            token=TokenResponse(
+                accessToken=auth.create_access_token(AccessToken(user_id=token_data.user_id, user=token_data.user))
+            )
         )
     if email is not None:
         cursor.execute("UPDATE users SET email=%s WHERE id=%s", (email, token_data.user_id))
@@ -167,8 +172,6 @@ async def get_ideas_bought_by_user(page: Optional[int] = 0, token_data: AccessTo
         result["categories"] = list(map(lambda x: x["category"], cursor.fetchall()))
         cursor.execute("SELECT * FROM files WHERE idea_id=%s AND idea_id!=id", (result["id"],))
         result["files"] = list(cursor.fetchall())
-        for file in result["files"]:
-            print(file["name"])
 
     # Find the number of ideas matching the criteria
     query = "SELECT COUNT(*) AS ideas_count " \
@@ -267,6 +270,7 @@ async def get_ideas_bought_by_user(page: Optional[int] = 0, token_data: AccessTo
 
 @router.put("/request-payout", response_model=PayoutRequest)
 async def request_payout(idea_id: str, _: AccessToken = Depends(get_token_data)):
+    is_db_up()
     verify_idea_id(idea_id)
 
     cursor = db.cursor(dictionary=True)
@@ -279,8 +283,10 @@ async def request_payout(idea_id: str, _: AccessToken = Depends(get_token_data))
 @router.get("/invoice/{idea_id}")
 async def get_invoice(idea_id: str, token_data: AccessToken = Depends(get_token_data)):
     is_db_up()
+    verify_idea_id(idea_id)
+
     cursor = db.cursor(dictionary=True)
-    cursor.execute("SELECT payments.date, payments.status, payments.idea_id, "
+    cursor.execute("SELECT payments.id, payments.date, payments.status, payments.idea_id, "
                    "ideas.seller_id, ideas.buyer_id, ideas.title, ideas.short_desc, ideas.price, "
                    "CONCAT(users.first_name,' ',users.last_name) as name "
                    "FROM payments "
@@ -288,6 +294,7 @@ async def get_invoice(idea_id: str, token_data: AccessToken = Depends(get_token_
                    "LEFT JOIN users ON payments.user_id=users.id "
                    "WHERE payments.idea_id=%s", (idea_id, ))
     result = cursor.fetchone()
+
     if result is None:
         raise InvoiceNotFoundError
     if result["status"] != "succeeded":
@@ -297,7 +304,7 @@ async def get_invoice(idea_id: str, token_data: AccessToken = Depends(get_token_
             raise InvoiceAccessUnauthorizedError
         else:
             return Invoice(
-                id=result["idea_id"],
+                id=result["id"],
                 date=result["date"],
                 userName=result["name"],
                 userType="seller",
@@ -307,7 +314,7 @@ async def get_invoice(idea_id: str, token_data: AccessToken = Depends(get_token_
             )
     else:
         return Invoice(
-            id=result["idea_id"],
+            id=result["id"],
             date=result["date"],
             userName=result["name"],
             userType="buyer",
