@@ -1,6 +1,6 @@
+import asyncio
+from websockets.exceptions import ConnectionClosedOK
 from fastapi import APIRouter, WebSocket
-from fastapi.responses import HTMLResponse
-import time
 
 router = APIRouter(
     prefix="/admin",
@@ -13,49 +13,22 @@ async def update_admin():
     return {"message": "Admin getting schwifty"}
 
 
-html = """
-<!DOCTYPE html>
-<html>
-    <head>
-        <title>Chat</title>
-    </head>
-    <body>
-        <h1>WebSocket Chat</h1>
-        <form action="" onsubmit="sendMessage(event)">
-            <input type="text" id="messageText" autocomplete="off"/>
-            <button>Send</button>
-        </form>
-        <ul id='messages'>
-        </ul>
-        <script>
-            var ws = new WebSocket("ws://creativitycrop.tech:8000/admin/ws1");
-            ws.onmessage = function(event) {
-                var messages = document.getElementById('messages')
-                var message = document.createElement('li')
-                var content = document.createTextNode(event.data)
-                message.appendChild(content)
-                messages.appendChild(message)
-            };
-            function sendMessage(event) {
-                var input = document.getElementById("messageText")
-                ws.send(input.value)
-                input.value = ''
-                event.preventDefault()
-            }
-        </script>
-    </body>
-</html>
-"""
-
-
-@router.get("/")
-async def get():
-    return HTMLResponse(html)
-
-
-@router.websocket("/ws")
+# TODO: add authentication and maybe query for customizing the refresh period :)
+@router.websocket("/admin/log")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    while True:
-        data = await websocket.receive_text()
-        await websocket.send_text(f"Message text was: {data}")
+    print("Connection accepted")
+    last_line = 0
+    try:
+        while True:
+            file = open(file="./log.log", mode="r", encoding="utf-8")
+            lines = file.readlines()
+            if len(lines) > last_line:
+                for i in range(last_line, len(lines)):
+                    await websocket.send_text(lines[i].rstrip())
+            last_line = len(lines)
+            file.close()
+            await asyncio.sleep(15)
+    except ConnectionClosedOK:
+        print("Connection closed by remote host")
+        await websocket.close()

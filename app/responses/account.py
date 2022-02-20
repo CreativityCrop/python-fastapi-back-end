@@ -2,7 +2,7 @@ from pydantic import BaseModel, EmailStr
 from typing import Optional, List
 from datetime import datetime
 
-from app.models.idea import BoughtIdea, SoldIdea
+from app.models.idea import BoughtIdea, SoldIdea, IdeaPartial
 from app.responses.auth import TokenResponse
 
 
@@ -17,12 +17,8 @@ class AccountData(BaseModel):
     dateLogin: datetime
     avatarURL: Optional[str]
     unfinishedPaymentIntent: Optional[str]
-    unfinishedPaymentIdeaID: Optional[str]
-    unfinishedPaymentIdeaTitle: Optional[str]
-    unfinishedPaymentIdeaShortDesc: Optional[str]
-    unfinishedPaymentIdeaPrice: Optional[float]
-    unfinishedPaymentIdeaPictureURL: Optional[str]
     unfinishedPaymentIntentSecret: Optional[str]
+    unfinishedPaymentIdea: Optional[IdeaPartial]
 
 
 class AccountUpdate(BaseModel):

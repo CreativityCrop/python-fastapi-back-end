@@ -55,22 +55,21 @@ async def get_account(token_data: AccessToken = Depends(get_token_data)):
     query = "SELECT users.*, " \
             "files.public_path AS avatar_url, " \
             "payments.id AS unfinished_intent, payments.idea_id AS unfinished_payment_idea, " \
-            "ideas.title, ideas.short_desc, ideas.price, " \
-            "(SELECT files.public_path FROM files WHERE files.id=payments.idea_id ) AS idea_img " \
+            "ideas.id AS idea_id, ideas.seller_id, ideas.title, ideas.short_desc, ideas.date_publish, ideas.date_expiry, " \
+            "ideas.price, (SELECT files.public_path FROM files WHERE files.id=payments.idea_id ) AS idea_img, " \
+            "(SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id) AS likes " \
             "FROM users " \
             "LEFT JOIN files ON users.avatar_id=files.id " \
             "LEFT JOIN payments ON users.id=payments.user_id AND payments.status != 'succeeded' " \
-            "AND payments.date > DATE_SUB(CURRENT_TIMESTAMP, INTERVAL 10 MINUTE)" \
+            "AND payments.date > DATE_SUB(CURRENT_TIMESTAMP, INTERVAL 10 MINUTE) " \
             "LEFT JOIN ideas ON ideas.id=payments.idea_Id " \
             "WHERE users.id=%s"
     cursor.execute(query, (token_data.user_id,))
     result = cursor.fetchone()
     cursor.close()
-
     # Checks for unfinished payment
     if result["unfinished_intent"] is not None:
         intent = stripe.PaymentIntent.retrieve(result["unfinished_intent"], )
-        result["unfinished_intent_secret"] = intent["client_secret"]
         return AccountData(
             id=result["id"],
             firstName=result["first_name"],
@@ -82,12 +81,18 @@ async def get_account(token_data: AccessToken = Depends(get_token_data)):
             dateLogin=result["date_login"],
             avatarURL=result["avatar_url"],
             unfinishedPaymentIntent=result["unfinished_intent"],
-            unfinishedPaymentIdeaID=result["unfinished_payment_idea"],
-            unfinishedPaymentIdeaTitle=result["title"],
-            unfinishedPaymentIdeaShortDesc=result["short_desc"],
-            unfinishedPaymentIdeaPrice=result["price"],
-            unfinishedPaymentIdeaPictureURL=result["idea_img"],
-            unfinishedPaymentIntentSecret=result["unfinished_intent_secret"]
+            unfinishedPaymentIntentSecret=intent["client_secret"],
+            unfinishedPaymentIdea=IdeaPartial(
+                id=result["idea_id"],
+                sellerID=result["seller_id"],
+                title=result["title"],
+                imageURL=result["idea_img"],
+                shortDesc=result["short_desc"],
+                price=result["price"],
+                datePublish=result["date_publish"],
+                dateExpiry=result["date_expiry"],
+                likes=result["likes"]
+            )
         )
 
     return AccountData(
