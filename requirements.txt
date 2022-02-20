@@ -13,3 +13,4 @@ requests
 python-jose[cryptography]
 python-multipart
 uvicorn[standard]
+websockets
