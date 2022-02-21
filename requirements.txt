@@ -14,4 +14,3 @@ python-jose[cryptography]
 python-multipart
 uvicorn[standard]
 websockets
-aiomysql
