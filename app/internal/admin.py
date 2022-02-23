@@ -21,7 +21,7 @@ async def websocket_endpoint(websocket: WebSocket):
     last_line = 0
     try:
         while True:
-            file = open(file="./log.log", mode="r", encoding="utf-8")
+            file = open(file="./log.log", mode="r", encoding="ascii")
             lines = file.readlines()
             if len(lines) > last_line:
                 for i in range(last_line, len(lines)):

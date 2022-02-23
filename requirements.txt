@@ -6,7 +6,6 @@ pydantic[email]
 bcrypt
 passlib
 jose
-uvicorn
 stripe
 aiofiles
 requests
@@ -14,3 +13,4 @@ python-jose[cryptography]
 python-multipart
 uvicorn[standard]
 websockets
+pytests
