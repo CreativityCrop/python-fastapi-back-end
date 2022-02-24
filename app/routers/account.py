@@ -55,8 +55,9 @@ async def get_account(token_data: AccessToken = Depends(get_token_data)):
     query = "SELECT users.*, " \
             "files.public_path AS avatar_url, " \
             "payments.id AS unfinished_intent, payments.idea_id AS unfinished_payment_idea, " \
-            "ideas.id AS idea_id, ideas.seller_id, ideas.title, ideas.short_desc, ideas.date_publish, ideas.date_expiry, " \
-            "ideas.price, (SELECT files.public_path FROM files WHERE files.id=payments.idea_id ) AS idea_img, " \
+            "ideas.id AS idea_id, ideas.seller_id, ideas.title, ideas.short_desc, ideas.date_publish, " \
+            "ideas.date_expiry, ideas.price, " \
+            "(SELECT files.public_path FROM files WHERE files.id=payments.idea_id ) AS idea_img, " \
             "(SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id) AS likes " \
             "FROM users " \
             "LEFT JOIN files ON users.avatar_id=files.id " \
@@ -291,13 +292,16 @@ async def get_invoice(idea_id: str, token_data: AccessToken = Depends(get_token_
     verify_idea_id(idea_id)
 
     cursor = db.cursor(dictionary=True)
-    cursor.execute("SELECT payments.id, payments.date, payments.status, payments.idea_id, "
-                   "ideas.seller_id, ideas.buyer_id, ideas.title, ideas.short_desc, ideas.price, "
-                   "CONCAT(users.first_name,' ',users.last_name) as name "
-                   "FROM payments "
-                   "LEFT JOIN ideas ON payments.idea_id=ideas.id "
-                   "LEFT JOIN users ON payments.user_id=users.id "
-                   "WHERE payments.idea_id=%s", (idea_id, ))
+    cursor.execute(
+        "SELECT payments.id, payments.date, payments.status, payments.idea_id, "
+        "ideas.seller_id, ideas.buyer_id, ideas.title, ideas.short_desc, ideas.price, "
+        "(SELECT CONCAT(users.first_name,' ',users.last_name) FROM users WHERE users.id=%s ) AS name "
+        "FROM payments "
+        "LEFT JOIN ideas ON payments.idea_id=ideas.id "
+        "LEFT JOIN users ON payments.user_id=users.id "
+        "WHERE payments.idea_id=%s",
+        (token_data.user_id, idea_id)
+    )
     result = cursor.fetchone()
 
     if result is None:
