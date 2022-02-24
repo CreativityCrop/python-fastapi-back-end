@@ -1,6 +1,6 @@
 from fastapi import APIRouter, File, UploadFile, Depends, HTTPException
 from fastapi.responses import FileResponse
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 import mysql.connector
 import aiofiles as aiofiles
@@ -57,7 +57,7 @@ def get_folder_for_file(filetype):
 
 
 @router.post("/upload")
-async def upload_files(idea_id: Optional[str] = None, files: list[UploadFile] = File(...),
+async def upload_files(files: List[UploadFile], idea_id: Optional[str] = None,
                        token_data: AccessToken = Depends(get_token_data)):
     verify_idea_id(idea_id)
     is_db_up()
