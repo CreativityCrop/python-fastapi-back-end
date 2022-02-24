@@ -154,7 +154,9 @@ async def update_account(avatar: Optional[UploadFile] = File(None),
         )
         result = AccountUpdate(
             status="success",
-            token=auth.create_access_token(AccessToken(user_id=token_data.user_id, user=token_data.user))
+            token=TokenResponse(
+                accessToken=auth.create_access_token(AccessToken(user_id=token_data.user_id, user=token_data.user))
+            )
         )
     cursor.close()
     return result
