@@ -1,13 +1,9 @@
 import mysql.connector
 import stripe
 
-DB_HOST = 'localhost'
-DB_USER = 'creativity_crop'
-DB_PASS = 'qO4n3BPtA4MgStJW'
-DB_NAME = 'creativity_crop'
+from config import DB_HOST, DB_USER, DB_PASS, DB_NAME, STRIPE_API_KEY
 
-stripe.api_key = '***REMOVED***' \
-                 '***REMOVED***'
+stripe.api_key = str(STRIPE_API_KEY)
 
 
 # TODO: Add user cleanup
