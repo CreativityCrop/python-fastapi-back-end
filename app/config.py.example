@@ -1,0 +1,98 @@
+from datetime import timedelta
+from starlette.config import Config
+from starlette.datastructures import Secret
+
+config = Config(".env")
+
+PROJECT_NAME = "creativitycrop"
+VERSION = "1.0.0"
+API_PREFIX = "/api"
+
+# Database properties
+DB_HOST = 'host'
+DB_USER = 'user'
+DB_PASS = 'pass'
+DB_NAME = 'database'
+
+# Stripe API keys
+STRIPE_API_KEY = config(
+    "STRIPE_API_KEY",
+    cast=Secret,
+    default='api_key'
+)
+STRIPE_WEBHOOK_SECRET = config("STRIPE_WEBHOOK_SECRET", cast=Secret, default='webhook_secret')
+
+MAILGUN_API_KEY = config("MAILGUN_API_KEY", cast=Secret, default='api_key')
+
+IDEA_EXPIRES_AFTER = config("IDEA_EXPIRES_AFTER", default=timedelta(days=31))
+
+# JWT creation properties
+JWT_ALGORITHM = config("JWT_ALGORITHM", cast=str, default="HS256")
+JWT_AUTH_SECRET_KEY = config(
+    "JWT_SECRET_KEY",
+    cast=Secret,
+    default="256-bit-hex-secret"
+)
+
+JWT_PASSWORD_RESET_SECRET_KEY = config(
+    "JWT_PASSWORD_RESET_SECRET_KEY",
+    cast=Secret,
+    default="256-bit-hex-secret"
+)
+
+JWT_EMAIL_VERIFY_SECRET_KEY = config(
+    "JWT_EMAIL_VERIFY_SECRET_KEY",
+    cast=Secret,
+    default="256-bit-hex-secret"
+)
+
+JWT_ACCESS_TOKEN_EXPIRE_MINUTES = config(
+    "JWT_ACCESS_TOKEN_EXPIRE_MINUTES",
+    cast=int,
+    default=60  # one hour
+)
+
+JWT_EMAIL_VERIFY_EXPIRE_MINUTES = config(
+    "JWT_EMAIL_VERIFY_EXPIRE_MINUTES",
+    cast=int,
+    default=21600
+)
+
+JWT_PASSWORD_RESET_EXPIRE_MINUTES = config(
+    "JWT_PASSWORD_RESET_EXPIRE_MINUTES",
+    cast=int,
+    default=5
+)
+
+CDN_FILES_PATH = "/var/www/cdn/"
+CDN_URL = "https://cdn.creativitycrop.tech/"
+
+CDN_IMAGE_TYPES = [
+    "image/svg+xml",
+    "image/jpeg",
+    "image/png"
+]
+
+CDN_MEDIA_TYPES = [
+    "audio/mpeg",
+    "video/mp4",
+    "video/mpeg"
+]
+
+CDN_DOCS_TYPES = [
+    "text/plain",
+    "text/csv",
+    "application/pdf",
+    "application/json",
+    "application/xml",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-powerpoint",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.rar",
+    "application/zip"
+]
+
+CDN_ALLOWED_CONTENT_TYPES = CDN_IMAGE_TYPES + CDN_MEDIA_TYPES + CDN_DOCS_TYPES
