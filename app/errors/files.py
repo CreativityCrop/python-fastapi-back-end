@@ -27,3 +27,12 @@ class FiletypeNotAllowedError(HTTPException):
             "msg": "You cannot upload this kind of files",
             "errno": 503
         })
+
+
+class FileAccessDeniedError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(status_code=status.HTTP_403_FORBIDDEN, detail={
+            "title": "Access Forbidden",
+            "msg": "You do not own the idea, that this file belongs to",
+            "errno": 504
+        })

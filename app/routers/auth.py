@@ -113,7 +113,7 @@ async def login_user(user: UserLogin):
     return TokenResponse(accessToken=access_token)
 
 
-@router.get("/verify")
+@router.get("/verify", response_model=AccessToken)
 def verify_token(token: str = Header(None, convert_underscores=False)):
     return auth.verify_access_token(token)
 
