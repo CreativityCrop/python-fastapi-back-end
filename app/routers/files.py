@@ -13,7 +13,7 @@ import app.authentication as auth
 from app.dependencies import get_token_data
 from app.functions import verify_idea_id
 from app.models.token import AccessToken
-from app.errors.files import UploadForbiddenError, UploadTooLateError, FiletypeNotAllowedError
+from app.errors.files import UploadForbiddenError, UploadTooLateError, FiletypeNotAllowedError, FileAccessDeniedError
 
 router = APIRouter(
     prefix="/files",
@@ -96,15 +96,25 @@ async def upload_files(files: List[UploadFile], idea_id: Optional[str] = None,
 
 @router.get("/download", response_class=FileResponse)
 async def download_file(file_id: str, token: str):
+    print("HI")
     # Here token must be a query parameter
-    auth.verify_access_token(token)
+    token_data = auth.verify_access_token(token)
     is_db_up()
 
     cursor = db.cursor(dictionary=True)
-    cursor.execute("SELECT * FROM files WHERE id=%s", (file_id,))
+    cursor.execute(
+        "SELECT *, ideas.buyer_id AS buyer_id "
+        "FROM files LEFT JOIN ideas ON files.idea_id = ideas.id "
+        "WHERE files.id=%s",
+        (file_id,)
+    )
     file = cursor.fetchone()
-
     cursor.close()
+
+    # Check if user has access to download the file
+    if file["buyer_id"] != token_data.user_id:
+        raise FileAccessDeniedError
+
     # Because of security measures in browser, downloads can only be initiated by same domain,
     # so we need to get a file and return it as response
     return FileResponse(path=file["absolute_path"], filename=file["name"], media_type=file["content_type"])

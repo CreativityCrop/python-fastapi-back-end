@@ -123,8 +123,9 @@ async def update_account(avatar: Optional[UploadFile] = File(None),
         async with aiofiles.open(f'{CDN_FILES_PATH + "accounts/" + avatar.filename}',
                                  "wb") as directory:
             await directory.write(temp)
-        file_id = hashlib.sha256(temp).hexdigest()
-        cursor.execute("INSERT INTO files(id, name, size, absolute_path, public_path, content_type)"
+        file_id = hashlib.sha256(
+                str(hashlib.sha256(temp).hexdigest() + "#USER" + str(token_data.user_id)).encode('utf-8')).hexdigest()
+        cursor.execute("REPLACE INTO files(id, name, size, absolute_path, public_path, content_type)"
                        "VALUES(%s, %s, %s, %s, %s, %s)",
                        (file_id, avatar.filename, avatar.spool_max_size,
                         f'{CDN_FILES_PATH + "accounts/" + avatar.filename}',
