@@ -23,7 +23,7 @@ token = str()
 def test_get_account():
     data = {
         "username": "test",
-        "pass_hash": hashlib.sha3_256("testtesttest".encode('utf-8')).hexdigest()
+        "pass_hash": hashlib.sha3_256("798XeLoup4".encode('utf-8')).hexdigest()
     }
     token_request = login.post("/auth/login", json=data)
     global token

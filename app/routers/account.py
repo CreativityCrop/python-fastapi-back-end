@@ -61,7 +61,7 @@ async def get_account(token_data: AccessToken = Depends(get_token_data)):
             "(SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id) AS likes " \
             "FROM users " \
             "LEFT JOIN files ON users.avatar_id=files.id " \
-            "LEFT JOIN payments ON users.id=payments.user_id AND payments.status != 'succeeded' " \
+            "LEFT JOIN payments ON users.id=payments.user_id AND payments.status = 'requires_payment_method' " \
             "AND payments.date > DATE_SUB(CURRENT_TIMESTAMP, INTERVAL 10 MINUTE) " \
             "LEFT JOIN ideas ON ideas.id=payments.idea_Id " \
             "WHERE users.id=%s"
