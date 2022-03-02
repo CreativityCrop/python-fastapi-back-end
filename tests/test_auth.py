@@ -25,7 +25,7 @@ token = str()
 def test_login():
     data = {
         "username": "test",
-        "pass_hash": hashlib.sha3_256("testtesttest".encode('utf-8')).hexdigest()
+        "pass_hash": hashlib.sha3_256("798XeLoup4".encode('utf-8')).hexdigest()
     }
     response = client.post("/auth/login", json=data)
     global token

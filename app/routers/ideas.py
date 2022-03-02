@@ -218,6 +218,11 @@ async def like_idea(idea_id: str, token_data: AccessToken = Depends(get_token_da
     is_db_up()
 
     cursor = db.cursor(dictionary=True)
+    cursor.execute("SELECT buyer_id FROM ideas WHERE id=%s", (idea_id,))
+    buyer_id = cursor.fetchone()["buyer_id"]
+    if buyer_id is not None:
+        raise IdeaLikeDenied
+
     # Try to insert a like row in the table, if a duplication error is thrown, delete the like
     try:
         cursor.execute("INSERT INTO ideas_likes(idea_id, user_id) VALUES(%s, %s)", (idea_id, token_data.user_id))

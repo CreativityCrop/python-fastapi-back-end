@@ -36,3 +36,12 @@ class IdeaDuplicationError(HTTPException):
             "msg": "Please contact us",
             "errno": 204
         })
+
+
+class IdeaLikeDenied(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(status_code=status.HTTP_403_FORBIDDEN, detail={
+            "title": "Like Denied",
+            "msg": "This idea is no longer for sale, you cannot like it",
+            "errno": 205
+        })

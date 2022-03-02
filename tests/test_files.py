@@ -22,7 +22,7 @@ files.db = auth.db = mysql.connector.connect(
 def test_file_access_denied():
     login_data = {
         "username": "test",
-        "pass_hash": hashlib.sha3_256("testtesttest".encode('utf-8')).hexdigest()
+        "pass_hash": hashlib.sha3_256("798XeLoup4".encode('utf-8')).hexdigest()
     }
     token_request = login.post("/auth/login", json=login_data)
     data = {
