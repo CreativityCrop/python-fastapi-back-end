@@ -16,5 +16,5 @@ if __name__ == "__main__":
         port=8000,
         reload=True,
         root_path="/api",
-        # workers=10
+        workers=10
     )
