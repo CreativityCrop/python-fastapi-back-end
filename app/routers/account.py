@@ -9,6 +9,7 @@ import app.authentication as auth
 from app.config import *
 from app.dependencies import get_token_data
 from app.errors.account import InvoiceUnavailableYetError, InvoiceAccessUnauthorizedError, InvoiceNotFoundError
+from app.errors.auth import EmailDuplicateError, UsernameDuplicateError
 from app.errors.files import FiletypeNotAllowedError
 from app.functions import verify_idea_id
 from app.models.idea import IdeaFile
@@ -133,7 +134,14 @@ async def update_account(avatar: Optional[UploadFile] = File(None),
         cursor.execute("UPDATE users SET avatar_id=%s WHERE id=%s", (file_id, token_data.user_id))
         result = AccountUpdate(status="success")
     if username is not None:
-        cursor.execute("UPDATE users SET username=%s WHERE id=%s", (username, token_data.user_id))
+        try:
+            cursor.execute("UPDATE users SET username=%s WHERE id=%s", (username, token_data.user_id))
+        except mysql.connector.errors.IntegrityError as ex:
+            field = ex.msg.split()[5]
+            if field == "'username'":
+                raise UsernameDuplicateError
+            else:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ex.__dict__)
         token_data.user = username
         result = AccountUpdate(
             status="success",
@@ -142,7 +150,14 @@ async def update_account(avatar: Optional[UploadFile] = File(None),
             )
         )
     if email is not None:
-        cursor.execute("UPDATE users SET email=%s WHERE id=%s", (email, token_data.user_id))
+        try:
+            cursor.execute("UPDATE users SET email=%s WHERE id=%s", (email, token_data.user_id))
+        except mysql.connector.errors.IntegrityError as ex:
+            field = ex.msg.split()[5]
+            if field == "'email'":
+                raise EmailDuplicateError
+            else:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ex.__dict__)
         result = AccountUpdate(status="success")
     if iban is not None:
         cursor.execute("UPDATE users SET iban=%s WHERE id=%s", (iban, token_data.user_id))
