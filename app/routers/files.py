@@ -83,7 +83,8 @@ async def upload_files(files: List[UploadFile], idea_id: Optional[str] = None,
             file_id = idea_id
         else:
             file_id = hashlib.sha256(
-                str(hashlib.sha256(temp).hexdigest() + "#IDEA" + idea_id).encode('utf-8')).hexdigest()
+                str(hashlib.sha256(temp).hexdigest() + "#IDEA" + idea_id).encode('utf-8')
+            ).hexdigest()
         cursor.execute("INSERT INTO files(id, idea_id, name, size, absolute_path, public_path, content_type)"
                        "VALUES(%s, %s, %s, %s, %s, %s, %s)",
                        (file_id, idea_id, file.filename, file.spool_max_size,
@@ -96,7 +97,6 @@ async def upload_files(files: List[UploadFile], idea_id: Optional[str] = None,
 
 @router.get("/download", response_class=FileResponse)
 async def download_file(file_id: str, token: str):
-    print("HI")
     # Here token must be a query parameter
     token_data = auth.verify_access_token(token)
     is_db_up()
