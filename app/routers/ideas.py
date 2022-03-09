@@ -198,8 +198,9 @@ async def post_idea(idea: IdeaPost, token_data: AccessToken = Depends(get_token_
             (datetime.now() + IDEA_EXPIRES_AFTER).isoformat(), idea.price)
     try:
         cursor.execute(query, data)
-        for category in idea.categories:
-            cursor.execute("INSERT INTO ideas_categories(idea_id, category) VALUES(%s, %s)", (idea_id, category))
+        if idea.categories is not None:
+            for category in idea.categories:
+                cursor.execute("INSERT INTO ideas_categories(idea_id, category) VALUES(%s, %s)", (idea_id, category))
     except mysql.connector.errors.IntegrityError as ex:
         field = ex.msg.split()[5]
         if field == "'id'":
