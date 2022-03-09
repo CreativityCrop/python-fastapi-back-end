@@ -49,15 +49,26 @@ async def create_payment(idea_id: str, token_data: AccessToken = Depends(get_tok
     is_db_up()
     cursor = db.cursor(dictionary=True)
 
-    cursor.execute("SELECT "
-                   "(SELECT COUNT(*) FROM payments WHERE idea_id=%s) AS idea_count, "
-                   "(SELECT COUNT(*) FROM payments WHERE user_id=%s AND status != 'succeeded') AS user_count",
-                   (idea_id, token_data.user_id)
-                   )
+    cursor.execute(
+        "SELECT "
+        "(SELECT COUNT(*) FROM payments WHERE idea_id=%s) AS idea_count, "
+        "(SELECT COUNT(*) FROM payments WHERE user_id=%s AND status != 'succeeded') AS user_count, "
+        "(SELECT user_id FROM payments WHERE idea_id=%s AND status != 'succeeded') AS buyer_id, "
+        "(SELECT id FROM payments WHERE idea_id=%s AND status != 'succeeded') AS payment_id ",
+        (idea_id, token_data.user_id, idea_id, idea_id)
+    )
     check = cursor.fetchone()
     # Payment already exists for that idea
     if check["idea_count"] != 0:
-        raise IdeaBusyError
+        # Check if user is the initiator of the payment
+        if check["buyer_id"] == token_data.user_id:
+            # If yes, give them the payment
+            intent = stripe.PaymentIntent.retrieve(check["payment_id"], )
+            return ClientSecret(
+                clientSecret=intent["client_secret"]
+            )
+        else:
+            raise IdeaBusyError
     # User already has an unfinished payment, cannot make another
     if check["user_count"] != 0:
         raise UnresolvedPaymentExistsError
@@ -107,7 +118,9 @@ async def delete_payment(idea_id: str, _: AccessToken = Depends(get_token_data))
     payment = cursor.fetchone()
 
     if payment is None:
-        raise PaymentNotFound
+        raise PaymentNotFoundError
+    if payment["status"] == "succeeded":
+        raise PaymentCannotBeCanceledError
 
     stripe.PaymentIntent.cancel(
         stripe.PaymentIntent(payment["id"])
@@ -130,7 +143,7 @@ def get_payment(token_data: AccessToken = Depends(get_token_data)):
     result = cursor.fetchone()
 
     if result is None:
-        raise PaymentNotFound
+        raise PaymentNotFoundError
 
     intent = stripe.PaymentIntent.retrieve(result["id"], )
 
