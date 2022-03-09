@@ -14,7 +14,8 @@ if __name__ == "__main__":
         "app.main:app",
         host="0.0.0.0",
         port=8000,
-        reload=True,
+        # For development purposes uncomment next line
+        # reload=True,
         root_path="/api",
-        workers=4
+        workers=6
     )
