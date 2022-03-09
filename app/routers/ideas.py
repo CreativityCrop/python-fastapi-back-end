@@ -109,8 +109,10 @@ async def get_idea_by_id(idea_id: str, token_data: AccessToken = Depends(get_tok
     cursor = db.cursor(dictionary=True)
     query = "SELECT ideas.*, " \
             "(SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id) AS likes, " \
-            "files.public_path AS image_url " \
+            "files.public_path AS image_url, " \
+            "payments.status AS payment_status, payments.user_id AS payment_user " \
             "FROM ideas LEFT JOIN files ON ideas.id=files.id " \
+            "LEFT JOIN payments ON ideas.id = payments.idea_id " \
             "WHERE ideas.id = %s"
     cursor.execute(query, (idea_id,))
     result = cursor.fetchone()
@@ -118,7 +120,10 @@ async def get_idea_by_id(idea_id: str, token_data: AccessToken = Depends(get_tok
     if result is None:
         raise IdeaNotFoundError
     if result["buyer_id"] is not None and result["buyer_id"] is not token_data.user_id:
-        raise IdeaAccessDeniedError
+        if result["payment_user"] is token_data.user_id and result["payment_status"] == "requires_payment_method":
+            pass
+        else:
+            raise IdeaAccessDeniedError
 
     # Get categories
     cursor.execute("SELECT category FROM ideas_categories WHERE idea_id=%s", (result["id"],))
