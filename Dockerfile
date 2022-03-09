@@ -5,4 +5,5 @@ RUN pip install --no-cache-dir --upgrade -r /creativitycrop-api/requirements.txt
 COPY ./app /creativitycrop-api/app
 COPY ./main.py /creativitycrop-api/main.py
 EXPOSE 8000
-CMD ["python", "main.py"]
+#CMD ["python", "main.py"]
+CMD exec python main.py > app.log 2>&1

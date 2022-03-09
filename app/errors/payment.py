@@ -29,10 +29,19 @@ class IdeaAlreadySoldError(HTTPException):
         })
 
 
-class PaymentNotFound(HTTPException):
+class PaymentNotFoundError(HTTPException):
     def __init__(self) -> None:
         super().__init__(status_code=status.HTTP_403_FORBIDDEN, detail={
             "title": "Payment Not Found",
             "msg": "There is no payment with that ID",
             "errno": 404
+        })
+
+
+class PaymentCannotBeCanceledError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(status_code=status.HTTP_403_FORBIDDEN, detail={
+            "title": "Payment Cannot Be Canceled",
+            "msg": "This payment is successful and cannot be canceled",
+            "errno": 405
         })
