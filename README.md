@@ -20,7 +20,7 @@ git clone https://github.com/CreativityCrop/react-front-end.git
 Create a virtual environment for the python project and activate it
 
 ```bash
-python -m venv && source venv/bin/activate
+python -m venv venv && source venv/bin/activate
 ```
 
 Then install all the required dependencies
