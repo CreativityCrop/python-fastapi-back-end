@@ -3,6 +3,7 @@ import mysql.connector
 from datetime import datetime
 from typing import Optional
 
+from app.database import database
 from app.config import DB_HOST, DB_USER, DB_PASS, DB_NAME, IDEA_EXPIRES_AFTER
 from app.dependencies import get_token_data
 from app.functions import verify_idea_id, calculate_idea_id
@@ -10,54 +11,35 @@ from app.models.idea import IdeaPost, IdeaPartial, IdeaFile, IdeaFull, IdeaSmall
 from app.models.token import AccessToken
 from app.errors.ideas import *
 from app.responses.ideas import IdeasList, IdeasHottest, Like
+from asyncmy import errors
 
 router = APIRouter(
     prefix="/ideas",
     tags=["ideas"]
 )
 
-db = mysql.connector.connect()
-
-
-def is_db_up():
-    try:
-        db.ping(reconnect=True, attempts=3, delay=5)
-    except mysql.connector.errors.InterfaceError as ex:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=ex.__dict__)
-    return True
-
-
-# Event that set-ups the application for startup
-@router.on_event("startup")
-async def startup_event():
-    global db
-    db = mysql.connector.connect(
-        host=DB_HOST,
-        user=DB_USER,
-        password=DB_PASS,
-        database=DB_NAME
-    )
-    # This makes it work without having to commit after every query
-    db.autocommit = True
-
 
 @router.get("/get", response_model=IdeasList)
 async def get_ideas(page: Optional[int] = 0, cat: Optional[str] = None):
-    is_db_up()
-
-    cursor = db.cursor(dictionary=True)
     query = "SELECT " \
             "ideas.id, seller_id, title, short_desc, date_publish, date_expiry, price, " \
             "files.public_path AS image_url," \
             "(SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id) AS likes " \
             "FROM ideas LEFT JOIN files ON ideas.id=files.id " \
             "WHERE buyer_id IS NULL AND " \
-            "(%s IS NULL OR ideas.id IN (SELECT idea_id FROM ideas_categories WHERE category LIKE %s))" \
-            "ORDER BY date_publish DESC LIMIT %s, %s "
-    cursor.execute(
-        query, (cat, cat, page * 10, (page + 1) * 10)
+            "(:cat IS NULL OR ideas.id IN (SELECT idea_id FROM ideas_categories WHERE category LIKE :cat))" \
+            "ORDER BY date_publish DESC LIMIT :start, :end"
+    results = await database.fetch_all(
+        query=query,
+        values={
+            "cat": cat,
+            "start": page * 10,
+            "end": ((page + 1) * 10)
+        }
     )
-    results = cursor.fetchall()
+
+    # Convert list of sqlalchemy rows to dict, so it is possible to add new keys
+    results = list(map(lambda item: dict(item), results))
 
     # Check if there are results, don't waste time to continue if not
     if len(results) == 0:
@@ -65,24 +47,24 @@ async def get_ideas(page: Optional[int] = 0, cat: Optional[str] = None):
 
     # Get categories
     for result in results:
-        cursor.execute("SELECT category FROM ideas_categories WHERE idea_id=%s", (result["id"],))
-        result["categories"] = list(map(lambda x: x["category"], cursor.fetchall()))
+        categories = await database.fetch_all(
+            query="SELECT category FROM ideas_categories WHERE idea_id=:idea_id",
+            values={"idea_id": result["id"]}
+        )
+        result["categories"] = list(map(lambda x: x["category"], categories))
 
     # Find the number of ideas matching the criteria
     query = "SELECT COUNT(*) AS ideas_count " \
             "FROM ideas " \
             "WHERE ideas.buyer_id IS NULL AND " \
-            "(%s IS NULL OR ideas.id IN (SELECT idea_id FROM ideas_categories WHERE category LIKE %s))"
-    cursor.execute(query, (cat, cat))
-    ideas_count = cursor.fetchone()["ideas_count"]
+            "(:cat IS NULL OR ideas.id IN (SELECT idea_id FROM ideas_categories WHERE category LIKE :cat))"
+    ideas_count = await database.fetch_val(query=query, values={"cat": cat}, column="ideas_count")
 
     # Calculate remaining ideas for endless scrolling feature
     if page == 0:
         ideas_left = ideas_count - len(results)
     else:
         ideas_left = ideas_count - (page * 10 + len(results))
-
-    cursor.close()
 
     return IdeasList(
         countLeft=ideas_left,
@@ -104,18 +86,16 @@ async def get_ideas(page: Optional[int] = 0, cat: Optional[str] = None):
 @router.get("/get/{idea_id}", response_model=IdeaFull)
 async def get_idea_by_id(idea_id: str, token_data: AccessToken = Depends(get_token_data)):
     verify_idea_id(idea_id)
-    is_db_up()
 
-    cursor = db.cursor(dictionary=True)
     query = "SELECT ideas.*, " \
             "(SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id) AS likes, " \
             "files.public_path AS image_url, " \
             "payments.status AS payment_status, payments.user_id AS payment_user " \
             "FROM ideas LEFT JOIN files ON ideas.id=files.id " \
             "LEFT JOIN payments ON ideas.id = payments.idea_id " \
-            "WHERE ideas.id = %s"
-    cursor.execute(query, (idea_id,))
-    result = cursor.fetchone()
+            "WHERE ideas.id = :idea_id"
+    # Fetch result and convert it to dict, so values can be changed
+    result = dict(await database.fetch_one(query=query, values={"idea_id": idea_id}))
 
     if result is None:
         raise IdeaNotFoundError
@@ -126,17 +106,17 @@ async def get_idea_by_id(idea_id: str, token_data: AccessToken = Depends(get_tok
             raise IdeaAccessDeniedError
 
     # Get categories
-    cursor.execute("SELECT category FROM ideas_categories WHERE idea_id=%s", (result["id"],))
-    result["categories"] = list(map(lambda x: x["category"], cursor.fetchall()))
+    result["categories"] = list(map(lambda x: x["category"], await database.fetch_all(
+        query="SELECT category FROM ideas_categories WHERE idea_id=:idea_id", values={"idea_id": result["id"]}
+    )))
 
     # Check if the user is the owner of the idea, if so fetch the files, else remove long description
     if result["buyer_id"] != token_data.user_id:
         del result["long_desc"]
     else:
-        cursor.execute("SELECT * FROM files WHERE idea_id=%s AND idea_id!=id", (result["id"],))
-        result["files"] = list(cursor.fetchall())
-
-    cursor.close()
+        result["files"] = await database.fetch_all(
+            query="SELECT * FROM files WHERE idea_id=:idea_id AND idea_id!=id", values={"idea_id": result["id"]}
+        )
 
     return IdeaFull(
         id=result["id"],
@@ -157,7 +137,7 @@ async def get_idea_by_id(idea_id: str, token_data: AccessToken = Depends(get_tok
             contentType=file["content_type"],
             uploadDate=file["upload_date"]
         ), result["files"])) if 'long_desc' in result else None,
-        categories=result["categories"],
+        # categories=result["categories"],
         price=result["price"],
         datePublish=result["date_publish"],
         dateExpiry=result["date_expiry"],
@@ -166,18 +146,12 @@ async def get_idea_by_id(idea_id: str, token_data: AccessToken = Depends(get_tok
 
 
 @router.get("/get-hottest", response_model=IdeasHottest)
-def get_hottest_ideas():
-    is_db_up()
-
-    cursor = db.cursor(dictionary=True)
+async def get_hottest_ideas():
     query = "SELECT ideas.id, ideas.title, files.public_path AS image_url, " \
             "(SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id) AS likes " \
             "FROM ideas LEFT JOIN files ON ideas.id=files.id " \
             "WHERE buyer_id IS NULL ORDER BY likes DESC LIMIT 5"
-    cursor.execute(query)
-    results = cursor.fetchall()
-
-    cursor.close()
+    results = await database.fetch_all(query)
 
     return IdeasHottest(
         ideas=list(map(lambda idea: IdeaSmall(
@@ -191,60 +165,68 @@ def get_hottest_ideas():
 
 @router.post("/post")
 async def post_idea(idea: IdeaPost, token_data: AccessToken = Depends(get_token_data)):
-    is_db_up()
-
-    # Long description is used for id of the idea, because it needs to be unique
+    # Long description is used for id of the idea, because it must be unique
     idea_id = calculate_idea_id(idea.long_desc)
 
-    cursor = db.cursor()
-    query = "INSERT INTO ideas(id, seller_id, title, short_desc, long_desc, " \
-            "date_publish, date_expiry, price) VALUES(%s, %s, %s, %s, %s, %s, %s, %s)"
-    data = (idea_id, token_data.user_id, idea.title, idea.short_desc, idea.long_desc, datetime.now().isoformat(),
-            (datetime.now() + IDEA_EXPIRES_AFTER).isoformat(), idea.price)
+    query = "INSERT INTO ideas(id, seller_id, title, short_desc, long_desc, date_publish, date_expiry, price) " \
+            "VALUES(:id, :seller_id, :title, :short_desc, :long_desc, :date_publish, :date_expiry, :price)"
+    data = {
+        "idea_id": idea_id,
+        "seller_id": token_data.user_id,
+        "title": idea.title,
+        "short_desc": idea.short_desc,
+        "long_desc": idea.long_desc,
+        "date_publish": datetime.now().isoformat(),
+        "date_expiry": (datetime.now() + IDEA_EXPIRES_AFTER).isoformat(),
+        "price": idea.price
+    }
     try:
-        cursor.execute(query, data)
+        await database.execute(query=query, values=data)
         if idea.categories is not None:
             for category in idea.categories:
-                cursor.execute("INSERT INTO ideas_categories(idea_id, category) VALUES(%s, %s)", (idea_id, category))
-    except mysql.connector.errors.IntegrityError as ex:
-        field = ex.msg.split()[5]
+                await database.execute(
+                    query="INSERT INTO ideas_categories(idea_id, category) VALUES(:idea_id, :category)",
+                    values={"idea_id": idea_id, "category": category}
+                )
+    except asyncmy.errors.IntegrityError as ex:
+        field = ex.args[1].split()[5]
         if field == "'id'":
             raise IdeaDuplicationError
         else:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ex.__dict__)
-
-    cursor.close()
-
     return idea_id
 
 
 @router.put("/like", response_model=Like)
 async def like_idea(idea_id: str, token_data: AccessToken = Depends(get_token_data)):
     verify_idea_id(idea_id)
-    is_db_up()
 
-    cursor = db.cursor(dictionary=True)
-    cursor.execute("SELECT buyer_id FROM ideas WHERE id=%s", (idea_id,))
-    buyer_id = cursor.fetchone()["buyer_id"]
+    buyer_id = await database.fetch_val(
+        query="SELECT buyer_id FROM ideas WHERE id=:idea_id", values={"idea_id": idea_id}, column="buyer_id"
+    )
     if buyer_id is not None:
         raise IdeaLikeDenied
 
     # Try to insert a like row in the table, if a duplication error is thrown, delete the like
     try:
-        cursor.execute("INSERT INTO ideas_likes(idea_id, user_id) VALUES(%s, %s)", (idea_id, token_data.user_id))
+        await database.execute(
+            query="INSERT INTO ideas_likes(idea_id, user_id) VALUES(:idea_id, :user_id)",
+            values={"idea_id": idea_id, "user_id": token_data.user_id}
+        )
         is_liked = True
-    except mysql.connector.IntegrityError:
-        cursor.execute("DELETE FROM ideas_likes WHERE idea_id = %s AND user_id = %s", (idea_id, token_data.user_id))
+    except asyncmy.errors.IntegrityError:
+        await database.execute(
+            query="DELETE FROM ideas_likes WHERE idea_id = :idea_id AND user_id = :user_id",
+            values={"idea_id": idea_id, "user_id": token_data.user_id}
+        )
         is_liked = False
 
     # Get the number of likes
     query = "SELECT " \
             "COUNT(*) AS likes_count, " \
-            "((SELECT COUNT(*) FROM ideas_likes WHERE idea_id=%s AND user_id=%s) = 1) AS is_liked " \
-            "FROM ideas_likes WHERE idea_id = %s"
-    cursor.execute(query, (idea_id, token_data.user_id, idea_id))
-    result = cursor.fetchone()
-    cursor.close()
+            "((SELECT COUNT(*) FROM ideas_likes WHERE idea_id=:idea_id AND user_id=:user_id) = 1) AS is_liked " \
+            "FROM ideas_likes WHERE idea_id = :idea_id"
+    result = await database.fetch_one(query=query, values={"idea_id": idea_id, "user_id": token_data.user_id})
 
     if result is None:
         raise IdeaNotFoundError
@@ -253,8 +235,3 @@ async def like_idea(idea_id: str, token_data: AccessToken = Depends(get_token_da
         isLiked=is_liked,
         count=result["likes_count"]
     )
-
-
-@router.on_event("shutdown")
-async def shutdown_event():
-    db.close()
