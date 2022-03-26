@@ -5,8 +5,8 @@ import requests
 import json
 from datetime import datetime
 
-from app.database import database
 from app.config import DB_USER, DB_PASS, DB_NAME, DB_HOST, MAILGUN_API_KEY
+from app.database import database
 from app import authentication as auth
 from app.models.user import UserRegister, UserLogin, UserPasswordReset, UserPasswordUpdate
 from app.models.token import AccessToken, EmailVerifyToken, PasswordResetToken

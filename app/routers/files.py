@@ -9,6 +9,7 @@ import hashlib
 from starlette import status
 
 from app.config import *
+from app.database import database
 import app.authentication as auth
 from app.dependencies import get_token_data
 from app.functions import verify_idea_id
@@ -19,30 +20,6 @@ router = APIRouter(
     prefix="/files",
     tags=["files"]
 )
-
-db = mysql.connector.connect()
-
-
-def is_db_up():
-    try:
-        db.ping(reconnect=True, attempts=3, delay=5)
-    except mysql.connector.errors.InterfaceError as ex:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=ex.__dict__)
-    return True
-
-
-# Event that set-ups the application for startup
-@router.on_event("startup")
-async def startup_event():
-    global db
-    db = mysql.connector.connect(
-        host=DB_HOST,
-        user=DB_USER,
-        password=DB_PASS,
-        database=DB_NAME
-    )
-    # This makes it work without having to commit after every query
-    db.autocommit = True
 
 
 def get_folder_for_file(filetype):
@@ -57,13 +34,16 @@ def get_folder_for_file(filetype):
 
 
 @router.post("/upload")
-async def upload_files(files: List[UploadFile], idea_id: Optional[str] = None,
-                       token_data: AccessToken = Depends(get_token_data)):
+async def upload_files(
+        files: List[UploadFile],
+        idea_id: Optional[str] = None,
+        token_data: AccessToken = Depends(get_token_data)
+):
     verify_idea_id(idea_id)
-    is_db_up()
-    cursor = db.cursor(dictionary=True)
-    cursor.execute("SELECT date_publish, seller_id FROM ideas WHERE id=%s", (idea_id,))
-    result = cursor.fetchone()
+    result = await database.fetch_one(
+        query="SELECT date_publish, seller_id FROM ideas WHERE id=:idea_id",
+        values={"idea_id": idea_id}
+    )
 
     # Only idea seller can upload files
     if token_data.user_id != result["seller_id"]:
@@ -75,45 +55,47 @@ async def upload_files(files: List[UploadFile], idea_id: Optional[str] = None,
     for file in files:
         if file.content_type not in CDN_ALLOWED_CONTENT_TYPES:
             raise FiletypeNotAllowedError
+
+        # Open file for reading
         temp = await file.read()
-        async with aiofiles.open(f'{CDN_FILES_PATH + get_folder_for_file(file.content_type) + idea_id + "_" + file.filename}',
-                                 "wb") as directory:
+        async with aiofiles.open(f'{CDN_FILES_PATH + get_folder_for_file(file.content_type) + idea_id + "_" + file.filename}', "wb") as directory:
             await directory.write(temp)
+        # If filename starts with title, it is title image for idea, so file_id needs to be the same as idea_id
         if file.filename.startswith("title-"):
             file_id = idea_id
         else:
             file_id = hashlib.sha256(
                 str(hashlib.sha256(temp).hexdigest() + "#IDEA" + idea_id).encode('utf-8')
             ).hexdigest()
-        cursor.execute(
-            "INSERT INTO files(id, idea_id, name, size, absolute_path, public_path, content_type)"
-            "VALUES(%s, %s, %s, %s, %s, %s, %s)",
-            (file_id, idea_id, file.filename, file.spool_max_size,
-             f'{CDN_FILES_PATH + get_folder_for_file(file.content_type) + idea_id + "_" + file.filename}',
-             f'{CDN_URL + get_folder_for_file(file.content_type) + idea_id + "_" + file.filename}', file.content_type
-            )
+        # Save info about file to database
+        await database.execute(
+            query="INSERT INTO files(id, idea_id, name, size, absolute_path, public_path, content_type) "
+                  "VALUES(:id, :idea_id, :name, :size, :absolute_path, :public_path, :content_type)",
+            values={
+                "id": file_id,
+                "idea_id": idea_id,
+                "name": file.filename,
+                "size": file.spool_max_size,
+                "absolute_path": f'{CDN_FILES_PATH + get_folder_for_file(file.content_type) + idea_id + "_" + file.filename}',
+                "public_path": f'{CDN_URL + get_folder_for_file(file.content_type) + idea_id + "_" + file.filename}',
+                "content_type": file.content_type
+            }
         )
-    cursor.close()
 
-    return
+    return {"status": "success"}
 
 
 @router.get("/download", response_class=FileResponse)
 async def download_file(file_id: str, token: str):
-    # Here token must be a query parameter
+    # Here token has to be a query parameter
     token_data = auth.verify_access_token(token)
-    is_db_up()
-
-    cursor = db.cursor(dictionary=True)
-    cursor.execute(
-        "SELECT *, ideas.buyer_id AS buyer_id "
-        "FROM files LEFT JOIN ideas ON files.idea_id = ideas.id "
-        "WHERE files.id=%s",
-        (file_id,)
+    # Get info about file from database
+    file = await database.fetch_one(
+        query="SELECT *, ideas.buyer_id AS buyer_id "
+              "FROM files LEFT JOIN ideas ON files.idea_id = ideas.id "
+              "WHERE files.id=:file_id",
+        values={"file_id": file_id}
     )
-    file = cursor.fetchone()
-    cursor.close()
-
     # Check if user has access to download the file
     if file["buyer_id"] != token_data.user_id:
         raise FileAccessDeniedError
@@ -121,8 +103,3 @@ async def download_file(file_id: str, token: str):
     # Because of security measures in browser, downloads can only be initiated by same domain,
     # so we need to get a file and return it as response
     return FileResponse(path=file["absolute_path"], filename=file["name"], media_type=file["content_type"])
-
-
-@router.on_event("shutdown")
-async def shutdown_event():
-    db.close()

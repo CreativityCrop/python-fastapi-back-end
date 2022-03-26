@@ -3,8 +3,8 @@ import mysql.connector
 from datetime import datetime
 from typing import Optional
 
-from app.database import database
 from app.config import DB_HOST, DB_USER, DB_PASS, DB_NAME, IDEA_EXPIRES_AFTER
+from app.database import database
 from app.dependencies import get_token_data
 from app.functions import verify_idea_id, calculate_idea_id
 from app.models.idea import IdeaPost, IdeaPartial, IdeaFile, IdeaFull, IdeaSmall

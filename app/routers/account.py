@@ -5,8 +5,9 @@ import stripe
 import aiofiles as aiofiles
 import hashlib
 
-import app.authentication as auth
 from app.config import *
+from app.database import database
+import app.authentication as auth
 from app.dependencies import get_token_data
 from app.errors.account import InvoiceUnavailableYetError, InvoiceAccessUnauthorizedError, InvoiceNotFoundError
 from app.errors.auth import EmailDuplicateError, UsernameDuplicateError
@@ -15,7 +16,6 @@ from app.functions import verify_idea_id
 from app.models.idea import IdeaFile
 from app.models.token import AccessToken
 from app.responses.account import *
-from app.database import database
 
 router = APIRouter(
     prefix="/account",
