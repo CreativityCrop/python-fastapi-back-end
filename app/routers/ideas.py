@@ -10,8 +10,8 @@ from app.functions import verify_idea_id, calculate_idea_id
 from app.models.idea import IdeaPost, IdeaPartial, IdeaFile, IdeaFull, IdeaSmall
 from app.models.token import AccessToken
 from app.errors.ideas import *
+from asyncmy.errors import IntegrityError
 from app.responses.ideas import IdeasList, IdeasHottest, Like
-from asyncmy import errors
 
 router = APIRouter(
     prefix="/ideas",
@@ -188,7 +188,7 @@ async def post_idea(idea: IdeaPost, token_data: AccessToken = Depends(get_token_
                     query="INSERT INTO ideas_categories(idea_id, category) VALUES(:idea_id, :category)",
                     values={"idea_id": idea_id, "category": category}
                 )
-    except asyncmy.errors.IntegrityError as ex:
+    except IntegrityError as ex:
         field = ex.args[1].split()[5]
         if field == "'id'":
             raise IdeaDuplicationError
@@ -214,7 +214,7 @@ async def like_idea(idea_id: str, token_data: AccessToken = Depends(get_token_da
             values={"idea_id": idea_id, "user_id": token_data.user_id}
         )
         is_liked = True
-    except asyncmy.errors.IntegrityError:
+    except IntegrityError:
         await database.execute(
             query="DELETE FROM ideas_likes WHERE idea_id = :idea_id AND user_id = :user_id",
             values={"idea_id": idea_id, "user_id": token_data.user_id}

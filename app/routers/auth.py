@@ -11,6 +11,7 @@ from app import authentication as auth
 from app.models.user import UserRegister, UserLogin, UserPasswordReset, UserPasswordUpdate
 from app.models.token import AccessToken, EmailVerifyToken, PasswordResetToken
 from app.errors.auth import *
+from asyncmy.errors import IntegrityError
 from app.responses.auth import TokenResponse, PasswordResetResponse
 
 router = APIRouter(
@@ -36,7 +37,7 @@ async def register_user(user: UserRegister):
     }
     try:
         await database.execute(query=query, values=data)
-    except asyncmy.errors.IntegrityError as ex:
+    except IntegrityError as ex:
         field = ex.args[1].split()[5]
         if field == "'email'":
             raise EmailDuplicateError
