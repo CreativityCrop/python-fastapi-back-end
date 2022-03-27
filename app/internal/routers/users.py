@@ -3,6 +3,8 @@ from io import StringIO
 import csv
 
 from app.database import database
+from app import authentication as auth
+from app.internal.models.users import PasswordUpdate
 from app.internal.responses.users import User, UsersList
 
 router = APIRouter(
@@ -10,7 +12,7 @@ router = APIRouter(
 )
 
 
-@router.get("/", response_model=UsersList)
+@router.get("", response_model=UsersList)
 async def get_users():
     users = await database.fetch_all(
         query="SELECT users.id, verified, first_name, last_name, email, username, iban, date_register, date_login, "
@@ -45,16 +47,17 @@ async def delete_user(user_id: int):
 
 # Route to update user password
 @router.put("/{user_id}/password")
-async def update_user_password(user_id: int, pass_hash: str):
+async def update_user_password(user_id: int, update_data: PasswordUpdate):
     salt = auth.generate_salt()
     await database.execute(
         query="UPDATE users SET salt=:salt, pass_hash=:pass_hash WHERE id=:user_id",
         values={
             "salt": salt,
-            "pass_hash": auth.hash_password(pass_hash, salt),
+            "pass_hash": auth.hash_password(update_data.pass_hash, salt),
             "user_id": user_id
         }
     )
+    return {"status": "success"}
 
 
 # Route to export users to csv file

@@ -8,7 +8,7 @@ router = APIRouter(
 )
 
 
-@router.get("/", response_model=IdeasList)
+@router.get("", response_model=IdeasList)
 async def get_ideas():
     ideas = await database.fetch_all(
         query="SELECT ideas.id, seller_id, buyer_id, title, short_desc, date_publish, date_expiry, date_bought, price, "
