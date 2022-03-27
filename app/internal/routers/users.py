@@ -3,8 +3,7 @@ from io import StringIO
 import csv
 
 from app.database import database
-from app.internal.models.users import User
-from app.internal.responses.users import UsersList
+from app.internal.responses.users import User, UsersList
 
 router = APIRouter(
     prefix="/users",
@@ -24,14 +23,14 @@ async def get_users():
         users=list(map(lambda user: User(
             id=user["id"],
             verified=user["verified"],
-            first_name=user["first_name"],
-            last_name=user["last_name"],
+            firstName=user["first_name"],
+            lastName=user["last_name"],
             email=user["email"],
             username=user["username"],
             iban=user["iban"],
-            date_register=user["date_register"],
-            date_login=user["date_login"],
-            avatar_url=user["avatar_url"]
+            dateRegister=user["date_register"],
+            dateLogin=user["date_login"],
+            avatarURL=user["avatar_url"]
         ), users))
     )
 

@@ -1,8 +1,7 @@
 from fastapi import APIRouter
 
 from app.database import database
-from app.internal.models.ideas import Idea, Category
-from app.internal.responses.ideas import IdeasList
+from app.internal.responses.ideas import Idea, Category, IdeasList
 
 router = APIRouter(
     prefix="/ideas",
@@ -14,7 +13,7 @@ async def get_ideas():
     ideas = await database.fetch_all(
         query="SELECT ideas.id, seller_id, buyer_id, title, short_desc, date_publish, date_expiry, date_bought, price, "
               "(SELECT COUNT(*) FROM ideas_likes WHERE ideas_likes.idea_id = ideas.id) AS likes ,"
-              "(SELECT public_path FROM files WHERE files.id = ideas.id) AS title_url "
+              "(SELECT public_path FROM files WHERE files.id = ideas.id) AS image_url "
               "FROM ideas"
     )
     # Convert list of sqlalchemy rows to dict, so it is possible to add new keys
@@ -29,16 +28,16 @@ async def get_ideas():
     return IdeasList(
         ideas=list(map(lambda temp: Idea(
             id=temp["id"],
-            seller_id=temp["seller_id"],
-            buyer_id=temp["buyer_id"],
+            sellerID=temp["seller_id"],
+            buyerID=temp["buyer_id"],
             title=temp["title"],
-            short_desc=temp["short_desc"][:75] + "...",
-            date_publish=temp["date_publish"],
-            date_expiry=temp["date_expiry"],
-            date_bought=temp["date_bought"],
+            shortDesc=temp["short_desc"][:75] + "...",
+            datePublish=temp["date_publish"],
+            dateExpiry=temp["date_expiry"],
+            dateBought=temp["date_bought"],
             price=temp["price"],
             likes=temp["likes"],
-            title_url=temp["title_url"],
+            imageURL=temp["image_url"],
             categories=list(map(lambda category: Category(
                 category=category["category"]
             ), temp["categories"]))
