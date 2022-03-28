@@ -31,7 +31,7 @@ async def get_ideas():
             sellerID=temp["seller_id"],
             buyerID=temp["buyer_id"],
             title=temp["title"],
-            shortDesc=temp["short_desc"][:75] + "...",
+            shortDesc=temp["short_desc"][:35] + "...",
             datePublish=temp["date_publish"],
             dateExpiry=temp["date_expiry"],
             dateBought=temp["date_bought"],

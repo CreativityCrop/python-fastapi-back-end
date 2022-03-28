@@ -34,7 +34,7 @@ async def get_payouts():
 
 
 # Endpoint to set payout status to completed
-@router.put("/{idea_id}/complete", response_model=Payout)
+@router.put("/{idea_id}/completed")
 async def complete_payout(idea_id: str):
     await database.execute(
         query="UPDATE payouts SET date_paid=CURRENT_TIMESTAMP(), status='completed' WHERE idea_id=:idea_id",
@@ -45,7 +45,7 @@ async def complete_payout(idea_id: str):
 
 
 # Endpoint to set payout status to completed
-@router.put("/{idea_id}/denied", response_model=Payout)
+@router.put("/{idea_id}/denied")
 async def complete_payout(idea_id: str):
     await database.execute(
         query="UPDATE payouts SET status='denied' WHERE idea_id=:idea_id",
