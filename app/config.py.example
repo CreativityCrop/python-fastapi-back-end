@@ -14,6 +14,8 @@ DB_USER = 'user'
 DB_PASS = 'pass'
 DB_NAME = 'database'
 
+SUPER_USERS = config("SUPER_USERS", cast=set, default={"username1", "username2"})
+
 # Stripe API keys
 STRIPE_API_KEY = config(
     "STRIPE_API_KEY",
