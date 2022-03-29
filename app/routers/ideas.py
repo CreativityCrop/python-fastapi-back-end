@@ -169,7 +169,7 @@ async def post_idea(idea: IdeaPost, token_data: AccessToken = Depends(get_token_
     idea_id = calculate_idea_id(idea.long_desc)
 
     query = "INSERT INTO ideas(id, seller_id, title, short_desc, long_desc, date_publish, date_expiry, price) " \
-            "VALUES(:id, :seller_id, :title, :short_desc, :long_desc, :date_publish, :date_expiry, :price)"
+            "VALUES(:idea_id, :seller_id, :title, :short_desc, :long_desc, :date_publish, :date_expiry, :price)"
     data = {
         "idea_id": idea_id,
         "seller_id": token_data.user_id,

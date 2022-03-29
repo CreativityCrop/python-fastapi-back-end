@@ -1,4 +1,7 @@
 from fastapi import APIRouter
+from fastapi.responses import StreamingResponse
+from io import StringIO
+import csv
 
 from app.database import database
 from app.internal.responses.payouts import Payout, PayoutsList
@@ -8,7 +11,7 @@ router = APIRouter(
 )
 
 
-@router.get("/", response_model=PayoutsList)
+@router.get("", response_model=PayoutsList)
 async def get_payouts():
     payouts = await database.fetch_all(
         query="SELECT payouts.*, users.first_name, users.last_name, users.iban, payments.amount "
@@ -53,3 +56,30 @@ async def complete_payout(idea_id: str):
     )
 
     return {"status": "success"}
+
+
+# Route to export payouts to csv file
+@router.get("/export", dependencies=None)
+async def export_payouts():
+    payouts = await database.fetch_all(
+        query="SELECT payouts.*, users.first_name, users.last_name, users.iban, payments.amount "
+              "FROM payouts "
+              "LEFT JOIN users ON users.id=payouts.user_id "
+              "LEFT JOIN payments ON payments.idea_id=payouts.idea_id "
+              "ORDER BY payouts.date, payouts.date_paid DESC"
+    )
+    f = StringIO()
+    f.write("SEP=,\n")
+
+    keys = payouts[0].keys()
+    dict_writer = csv.DictWriter(f, keys)
+    dict_writer.writeheader()
+    dict_writer.writerows(map(lambda user: dict(user), payouts))
+    data = f.getvalue()
+    f.close()
+
+    return StreamingResponse(
+        iter([data]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=payouts.csv"}
+    )

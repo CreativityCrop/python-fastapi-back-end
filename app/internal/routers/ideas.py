@@ -14,7 +14,7 @@ async def get_ideas():
         query="SELECT ideas.id, seller_id, buyer_id, title, short_desc, date_publish, date_expiry, date_bought, price, "
               "(SELECT COUNT(*) FROM ideas_likes WHERE ideas_likes.idea_id = ideas.id) AS likes ,"
               "(SELECT public_path FROM files WHERE files.id = ideas.id) AS image_url "
-              "FROM ideas"
+              "FROM ideas ORDER BY date_publish DESC"
     )
     # Convert list of sqlalchemy rows to dict, so it is possible to add new keys
     ideas = list(map(lambda item: dict(item), ideas))
@@ -45,8 +45,8 @@ async def get_ideas():
     )
 
 
-@router.delete("/{id}")
-async def delete_idea(idea_id: int):
+@router.delete("/{idea_id}")
+async def delete_idea(idea_id: str):
     await database.execute(
         query="DELETE FROM ideas WHERE id = :idea_id",
         values={"idea_id": idea_id}
