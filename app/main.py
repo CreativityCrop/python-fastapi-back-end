@@ -4,6 +4,7 @@ from starlette.responses import RedirectResponse
 
 from app.routers import auth, account, ideas, files, payment
 from app.internal import admin
+from app.database import database
 
 app = FastAPI(
     title="CreativityCrop API",
@@ -45,6 +46,16 @@ app.add_middleware(
     allow_headers=["*"]
 
 )
+
+
+@app.on_event("startup")
+async def app_startup():
+    await database.connect()
+
+
+@app.on_event("shutdown")
+async def app_shutdown():
+    await database.disconnect()
 
 
 # Root route redirects to main page

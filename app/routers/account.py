@@ -5,8 +5,9 @@ import stripe
 import aiofiles as aiofiles
 import hashlib
 
-import app.authentication as auth
 from app.config import *
+from app.database import database
+import app.authentication as auth
 from app.dependencies import get_token_data
 from app.errors.account import InvoiceUnavailableYetError, InvoiceAccessUnauthorizedError, InvoiceNotFoundError
 from app.errors.auth import EmailDuplicateError, UsernameDuplicateError
@@ -23,36 +24,9 @@ router = APIRouter(
 
 stripe.api_key = str(STRIPE_API_KEY)
 
-db = mysql.connector.connect()
-
-
-def is_db_up():
-    try:
-        db.ping(reconnect=True, attempts=3, delay=5)
-    except mysql.connector.errors.InterfaceError as ex:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=ex.__dict__)
-    return True
-
-
-# Event that set-ups the application for startup
-@router.on_event("startup")
-async def startup_event():
-    global db
-    db = mysql.connector.connect(
-        host=DB_HOST,
-        user=DB_USER,
-        password=DB_PASS,
-        database=DB_NAME
-    )
-    # This makes it work without having to commit after every query
-    db.autocommit = True
-
 
 @router.get("", response_model=AccountData)
 async def get_account(token_data: AccessToken = Depends(get_token_data)):
-    is_db_up()
-
-    cursor = db.cursor(dictionary=True)
     query = "SELECT users.*, " \
             "files.public_path AS avatar_url, " \
             "payments.id AS unfinished_intent, payments.idea_id AS unfinished_payment_idea, " \
@@ -65,10 +39,8 @@ async def get_account(token_data: AccessToken = Depends(get_token_data)):
             "LEFT JOIN payments ON users.id=payments.user_id AND payments.status = 'requires_payment_method' " \
             "AND payments.date > DATE_SUB(CURRENT_TIMESTAMP, INTERVAL 10 MINUTE) " \
             "LEFT JOIN ideas ON ideas.id=payments.idea_Id " \
-            "WHERE users.id=%s"
-    cursor.execute(query, (token_data.user_id,))
-    result = cursor.fetchone()
-    cursor.close()
+            "WHERE users.id=:user_id"
+    result = await database.fetch_one(query=query, values={"user_id": token_data.user_id})
     # Checks for unfinished payment
     if result["unfinished_intent"] is not None:
         intent = stripe.PaymentIntent.retrieve(result["unfinished_intent"], )
@@ -181,36 +153,43 @@ async def update_account(avatar: Optional[UploadFile] = File(None),
 @router.get("/ideas/bought")
 async def get_ideas_bought_by_user(page: Optional[int] = 0, token_data: AccessToken = Depends(get_token_data)):
     load_count = 5
-    is_db_up()
-    cursor = db.cursor(dictionary=True)
     query = "SELECT ideas.*, " \
             "files.public_path AS image_url, " \
             "( SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id ) AS likes " \
             "FROM ideas " \
             "LEFT JOIN files ON ideas.id=files.id " \
-            "WHERE buyer_id=%s ORDER BY date_bought DESC LIMIT %s, %s"
-    cursor.execute(query, (token_data.user_id, page * load_count, (page + 1) * load_count))
-    results = cursor.fetchall()
+            "WHERE buyer_id=:buyer_id ORDER BY date_bought DESC LIMIT :start, :end"
+    results = await database.fetch_all(
+        query=query, values={"buyer_id": token_data.user_id, "start": page * load_count, "end": (page + 1) * load_count}
+    )
+
+    # Convert list of sqlalchemy rows to dict, so it is possible to add new keys
+    results = list(map(lambda item: dict(item), results))
+
     for result in results:
-        cursor.execute("SELECT category FROM ideas_categories WHERE idea_id=%s", (result["id"],))
-        result["categories"] = list(map(lambda x: x["category"], cursor.fetchall()))
-        cursor.execute("SELECT * FROM files WHERE idea_id=%s AND idea_id!=id", (result["id"],))
-        result["files"] = list(cursor.fetchall())
+        # cursor.execute("SELECT category FROM ideas_categories WHERE idea_id=%s", (result["id"],))
+        # result["categories"] = list(map(lambda x: x["category"], cursor.fetchall()))
+        result["categories"] = list(map(lambda x: x["category"], await database.fetch_all(
+            query="SELECT category FROM ideas_categories WHERE idea_id=:idea_id", values={"idea_id": result["id"]}
+        )))
+        # cursor.execute("SELECT * FROM files WHERE idea_id=%s AND idea_id!=id", (result["id"],))
+        result["files"] = list(await database.fetch_all(
+            query="SELECT * FROM files WHERE idea_id=:idea_id AND idea_id!=id", values={"idea_id": result["id"]}
+        ))
 
     # Find the number of ideas matching the criteria
     query = "SELECT COUNT(*) AS ideas_count " \
             "FROM ideas " \
-            "WHERE buyer_id=%s"
-    cursor.execute(query, (token_data.user_id,))
-    ideas_count = cursor.fetchone()["ideas_count"]
+            "WHERE buyer_id=:buyer_id"
+    ideas_count = await database.fetch_val(
+        query=query, values={"buyer_id": token_data.user_id}, column="ideas_count"
+    )
 
     # Calculate remaining ideas for endless scrolling feature
     if page == 0:
         ideas_left = ideas_count - len(results)
     else:
         ideas_left = ideas_count - (page * load_count + len(results))
-
-    cursor.close()
 
     return BoughtIdeas(
         countLeft=ideas_left,
@@ -245,26 +224,28 @@ async def get_ideas_bought_by_user(page: Optional[int] = 0, token_data: AccessTo
 @router.get("/ideas/sold")
 async def get_ideas_bought_by_user(page: Optional[int] = 0, token_data: AccessToken = Depends(get_token_data)):
     load_count = 5
-
-    is_db_up()
-    cursor = db.cursor(dictionary=True)
     query = "SELECT ideas.id, seller_id, title, price, date_publish, date_bought, " \
             "files.public_path AS image_url, " \
             "( SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id ) AS likes, " \
             "( SELECT status FROM payouts WHERE idea_id=ideas.id ) AS payout_status " \
             "FROM ideas " \
             "LEFT JOIN files ON ideas.id=files.id " \
-            "WHERE seller_id=%s AND buyer_id IS NOT NULL AND buyer_id != -1 " \
-            "ORDER BY date_publish ASC LIMIT %s, %s"
-    cursor.execute(query, (token_data.user_id, page * load_count, (page + 1) * load_count))
-    results = cursor.fetchall()
+            "WHERE seller_id=:seller_id AND buyer_id IS NOT NULL AND buyer_id != -1 " \
+            "ORDER BY date_publish LIMIT :start, :end"
+    results = await database.fetch_all(
+        query=query, values={"seller_id": token_data.user_id, "start": page * load_count, "end": (page + 1) * load_count}
+    )
+
+    # Convert list of sqlalchemy rows to dict, so it is possible to add new keys
+    results = list(map(lambda item: dict(item), results))
 
     # Find the number of ideas matching the criteria
     query = "SELECT COUNT(*) AS ideas_count " \
             "FROM ideas " \
-            "WHERE seller_id=%s AND buyer_id IS NOT NULL AND buyer_id != -1"
-    cursor.execute(query, (token_data.user_id,))
-    ideas_count = cursor.fetchone()["ideas_count"]
+            "WHERE seller_id=:seller_id AND buyer_id IS NOT NULL AND buyer_id != -1"
+    ideas_count = await database.fetch_val(
+        query=query, values={"seller_id": token_data.user_id}, column="ideas_count"
+    )
 
     # Calculate remaining ideas for endless scrolling feature
     if len(results) == 0:
@@ -273,8 +254,6 @@ async def get_ideas_bought_by_user(page: Optional[int] = 0, token_data: AccessTo
         ideas_left = ideas_count - len(results)
     else:
         ideas_left = ideas_count - (page * load_count + len(results))
-
-    cursor.close()
 
     return SoldIdeas(
         countLeft=ideas_left,
@@ -294,33 +273,31 @@ async def get_ideas_bought_by_user(page: Optional[int] = 0, token_data: AccessTo
 
 @router.put("/request-payout", response_model=PayoutRequest)
 async def request_payout(idea_id: str, _: AccessToken = Depends(get_token_data)):
-    is_db_up()
+    # Check if idea id is right
     verify_idea_id(idea_id)
-
-    cursor = db.cursor(dictionary=True)
-    cursor.execute("UPDATE payouts SET status='processing', date=CURRENT_TIMESTAMP() WHERE idea_id=%s", (idea_id,))
-    cursor.close()
-
+    # Update status
+    await database.execute(
+        query="UPDATE payouts SET status='processing', date=CURRENT_TIMESTAMP() WHERE idea_id=:idea_id",
+        values={"idea_id": idea_id}
+    )
+    # Return something
     return PayoutRequest(status="processing")
 
 
 @router.get("/invoice/{idea_id}")
 async def get_invoice(idea_id: str, token_data: AccessToken = Depends(get_token_data)):
-    is_db_up()
     verify_idea_id(idea_id)
 
-    cursor = db.cursor(dictionary=True)
-    cursor.execute(
-        "SELECT payments.id, payments.date, payments.status, payments.idea_id, "
-        "ideas.seller_id, ideas.buyer_id, ideas.title, ideas.short_desc, ideas.price, "
-        "(SELECT CONCAT(users.first_name,' ',users.last_name) FROM users WHERE users.id=%s ) AS name "
-        "FROM payments "
-        "LEFT JOIN ideas ON payments.idea_id=ideas.id "
-        "LEFT JOIN users ON payments.user_id=users.id "
-        "WHERE payments.idea_id=%s",
-        (token_data.user_id, idea_id)
+    result = await database.fetch_one(
+        query="SELECT payments.id, payments.date, payments.status, payments.idea_id, "
+              "ideas.seller_id, ideas.buyer_id, ideas.title, ideas.short_desc, ideas.price, "
+              "(SELECT CONCAT(users.first_name,' ',users.last_name) FROM users WHERE users.id=:user_id) AS name "
+              "FROM payments "
+              "LEFT JOIN ideas ON payments.idea_id=ideas.id "
+              "LEFT JOIN users ON payments.user_id=users.id "
+              "WHERE payments.idea_id=:idea_id",
+        values={"user_id": token_data.user_id, "idea_id": idea_id}
     )
-    result = cursor.fetchone()
 
     if result is None:
         raise InvoiceNotFoundError
@@ -350,8 +327,3 @@ async def get_invoice(idea_id: str, token_data: AccessToken = Depends(get_token_
             ideaShortDesc=result["short_desc"],
             ideaPrice=result["price"]
         )
-
-
-@router.on_event("shutdown")
-async def shutdown_event():
-    db.close()

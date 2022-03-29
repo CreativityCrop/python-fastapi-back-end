@@ -6,10 +6,12 @@ import json
 from datetime import datetime
 
 from app.config import DB_USER, DB_PASS, DB_NAME, DB_HOST, MAILGUN_API_KEY
+from app.database import database
 from app import authentication as auth
 from app.models.user import UserRegister, UserLogin, UserPasswordReset, UserPasswordUpdate
 from app.models.token import AccessToken, EmailVerifyToken, PasswordResetToken
 from app.errors.auth import *
+from asyncmy.errors import IntegrityError
 from app.responses.auth import TokenResponse, PasswordResetResponse
 
 router = APIRouter(
@@ -17,52 +19,37 @@ router = APIRouter(
     tags=["authentication"]
 )
 
-db = mysql.connector.connect()
-
-
-def is_db_up():
-    try:
-        db.ping(reconnect=True, attempts=3, delay=5)
-    except mysql.connector.errors.InterfaceError as ex:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=ex.__dict__)
-    return True
-
-
-# Event that set-ups the application for startup
-@router.on_event("startup")
-async def startup_event():
-    global db
-    db = mysql.connector.connect(
-        host=DB_HOST,
-        user=DB_USER,
-        password=DB_PASS,
-        database=DB_NAME
-    )
-    # This makes it work without having to commit after every query
-    db.autocommit = True
-
 
 @router.post("/register")
 async def register_user(user: UserRegister):
-    is_db_up()
-    cursor = db.cursor()
     query = "INSERT INTO users(first_name, last_name, email, iban, username, salt, pass_hash, date_register) " \
-            "VALUES(%s, %s, %s, %s, %s, %s, %s, %s)"
+            "VALUES(:first_name, :last_name, :email, :iban, :username, :salt, :pass_hash, :date_register)"
     salt = auth.generate_salt()
-    data = (user.first_name, user.last_name, user.email, user.iban, user.username,
-            salt, auth.hash_password(user.pass_hash, salt), datetime.now().isoformat())
+    data = {
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+        "email": user.email,
+        "iban": user.iban,
+        "username": user.username,
+        "salt": salt,
+        "pass_hash": auth.hash_password(user.pass_hash, salt),
+        "date_register": datetime.now().isoformat()
+    }
     try:
-        cursor.execute(query, data)
-    except mysql.connector.errors.IntegrityError as ex:
-        field = ex.msg.split()[5]
+        await database.execute(query=query, values=data)
+    except IntegrityError as ex:
+        field = ex.args[1].split()[5]
         if field == "'email'":
             raise EmailDuplicateError
         if field == "'username'":
             raise UsernameDuplicateError
         else:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ex.__dict__)
-    user_id = cursor.lastrowid
-    cursor.close()
+    user_id = await database.fetch_val(
+        query="SELECT id FROM users WHERE username=:username",
+        values={"username": user.username},
+        column=0
+    )
 
     email_token = auth.create_email_verify_token(
         EmailVerifyToken(user_id=user_id, user=user.username, email=user.email)
@@ -89,12 +76,10 @@ async def register_user(user: UserRegister):
 
 @router.post("/login", response_model=TokenResponse)
 async def login_user(user: UserLogin):
-    is_db_up()
-
-    cursor = db.cursor(dictionary=True)
-    query = 'SELECT * FROM users WHERE username = %s'
-    cursor.execute(query, (user.username,))
-    result = cursor.fetchone()
+    result = await database.fetch_one(
+        query='SELECT * FROM users WHERE username = :username',
+        values={"username": user.username}
+    )
 
     if result is None:
         raise UserNotFoundError
@@ -104,12 +89,13 @@ async def login_user(user: UserLogin):
     if not auth.verify_password(user.pass_hash, result["salt"], result["pass_hash"]):
         raise PasswordIncorrectError
 
-    query = "UPDATE users SET date_login = %s WHERE users.username = %s;"
-    cursor.execute(query, (datetime.now().isoformat(), user.username))
+    await database.execute(
+        query="UPDATE users SET date_login = :date_login WHERE users.username = :username",
+        values={"date_login": datetime.now().isoformat(), "username": user.username}
+    )
     access_token = auth.create_access_token(
         AccessToken(user_id=result["id"], user=user.username)
     )
-    cursor.close()
     return TokenResponse(accessToken=access_token)
 
 
@@ -120,31 +106,28 @@ def verify_token(token: str = Header(None, convert_underscores=False)):
 
 @router.get("/verify-email", response_class=RedirectResponse)
 async def verify_email_account(token: str):
-    is_db_up()
     # Here token must be a query parameter
     token_data = auth.verify_email_verify_token(token)
 
-    cursor = db.cursor(dictionary=True)
-    cursor.execute("UPDATE users SET verified=TRUE WHERE email=%s", (token_data.email,))
-    cursor.close()
+    await database.execute(
+        query="UPDATE users SET verified=TRUE WHERE email = :email",
+        values={"email": token_data.email}
+    )
+
     # auth_token = auth.create_access_token(AccessToken(user_id=token_data.user_id, user=token_data.user))
     return RedirectResponse("https://creativitycrop.tech/login?email_verified=true")
 
 
 @router.post("/request-password-reset", response_model=PasswordResetResponse)
 async def request_password_reset(email: UserPasswordReset):
-    is_db_up()
-
-    cursor = db.cursor(dictionary=True)
-    cursor.execute(
-        "SELECT id, first_name, CONCAT(first_name, ' ', last_name) AS name, username, email FROM users WHERE email=%s",
-        (email.email,)
+    user = await database.fetch_one(
+        query="SELECT id, first_name, username, email FROM users WHERE email=:email",
+        values={"email": email.email}
     )
-    user = cursor.fetchone()
     if user is None:
         raise EmailNotFoundError
     password_reset_token = auth.create_password_reset_token(
-        PasswordResetToken(user_id=user["id"], user=user["name"], email=user["email"])
+        PasswordResetToken(user_id=user["id"], user=user["username"], email=user["email"])
     )
     requests.post(
         "https://api.eu.mailgun.net/v3/app.creativitycrop.tech/messages",
@@ -161,28 +144,23 @@ async def request_password_reset(email: UserPasswordReset):
             })
         }
     )
-    cursor.close()
 
     return PasswordResetResponse(status="success")
 
 
 @router.put("/password-reset", response_model=TokenResponse)
 async def password_reset(new_data: UserPasswordUpdate, token: str = Header(None, convert_underscores=False)):
-    is_db_up()
     token_data = auth.verify_password_reset_token(token)
     salt = auth.generate_salt()
 
-    cursor = db.cursor(dictionary=True)
-    cursor.execute(
-        "UPDATE users SET salt=%s, pass_hash=%s WHERE id=%s",
-        (salt, auth.hash_password(new_data.pass_hash, salt), token_data.user_id,)
+    await database.execute(
+        query="UPDATE users SET salt=:salt, pass_hash=:pass_hash WHERE id=:id",
+        values={
+            "salt": salt,
+            "pass_hash": auth.hash_password(new_data.pass_hash, salt),
+            "id": token_data.user_id
+        }
     )
+
     access_token = auth.create_access_token(AccessToken(user_id=token_data.user_id, user=token_data.user))
-    cursor.close()
-
     return TokenResponse(accessToken=access_token)
-
-
-@router.on_event("shutdown")
-async def shutdown_event():
-    db.close()

@@ -45,3 +45,5 @@ uvicorn==0.17.5
 uvloop==0.16.0
 watchgod==0.7
 websockets==10.2
+databases~=0.5.5
+asyncmy~=0.2.3
