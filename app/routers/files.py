@@ -11,25 +11,15 @@ from app.config import *
 from app.database import database
 import app.authentication as auth
 from app.dependencies import get_token_data
-from app.functions import verify_idea_id
+from app.functions import verify_idea_id, get_folder_for_file
 from app.models.token import AccessToken
 from app.errors.files import UploadForbiddenError, UploadTooLateError, FiletypeNotAllowedError, FileAccessDeniedError
+
 
 router = APIRouter(
     prefix="/files",
     tags=["files"]
 )
-
-
-def get_folder_for_file(filetype):
-    if filetype in CDN_DOCS_TYPES:
-        return "docs/"
-    elif filetype in CDN_MEDIA_TYPES:
-        return "media/"
-    elif filetype in CDN_IMAGE_TYPES:
-        return "img/"
-    else:
-        raise FiletypeNotAllowedError
 
 
 @router.post("/upload")
@@ -67,6 +57,7 @@ async def upload_files(
                 str(hashlib.sha256(temp).hexdigest() + "#IDEA" + idea_id).encode('utf-8')
             ).hexdigest()
         # Save info about file to database
+        # TODO: if duplication error on id then file probably exists, contact security lol
         await database.execute(
             query="INSERT INTO files(id, idea_id, name, size, absolute_path, public_path, content_type) "
                   "VALUES(:id, :idea_id, :name, :size, :absolute_path, :public_path, :content_type)",

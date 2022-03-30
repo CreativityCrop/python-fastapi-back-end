@@ -1,13 +1,12 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Form, UploadFile, File
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 from fastapi_redis_cache import FastApiRedisCache, cache, cache_one_hour
-
 
 from app.config import DB_HOST, DB_USER, DB_PASS, DB_NAME, IDEA_EXPIRES_AFTER
 from app.database import database
 from app.dependencies import get_token_data
-from app.functions import verify_idea_id, calculate_idea_id
+from app.functions import verify_idea_id, calculate_idea_id, save_file
 from app.models.idea import IdeaPost, IdeaPartial, IdeaFile, IdeaFull, IdeaSmall
 from app.models.token import AccessToken
 from app.errors.ideas import *
@@ -21,7 +20,7 @@ router = APIRouter(
 
 
 @router.get("/get", response_model=IdeasList)
-@cache(expire=120)
+@cache(expire=180)
 async def get_ideas(page: Optional[int] = 0, cat: Optional[str] = None):
     query = "SELECT " \
             "ideas.id, seller_id, title, short_desc, date_publish, date_expiry, price, " \
@@ -149,7 +148,7 @@ async def get_idea_by_id(idea_id: str, token_data: AccessToken = Depends(get_tok
 
 
 @router.get("/get-hottest", response_model=IdeasHottest)
-@cache(expire=120)
+@cache(expire=600)
 async def get_hottest_ideas():
     query = "SELECT ideas.id, ideas.title, files.public_path AS image_url, " \
             "(SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id) AS likes " \
@@ -198,6 +197,58 @@ async def post_idea(idea: IdeaPost, token_data: AccessToken = Depends(get_token_
             raise IdeaDuplicationError
         else:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ex.__dict__)
+    return idea_id
+
+
+@router.post("/post2")
+async def post_idea_dos(
+        files: List[UploadFile] = File(None),
+        title: str = Form(...),
+        image: UploadFile = File(...),
+        short_desc: str = Form(...),
+        long_desc: str = Form(...),
+        categories: Optional[list] = Form(...),
+        price: float = Form(...),
+        token_data: AccessToken = Depends(get_token_data),
+):
+    # Long description is used for id of the idea, because it must be unique
+    idea_id = calculate_idea_id(long_desc)
+
+    query = "INSERT INTO ideas(id, seller_id, title, short_desc, long_desc, date_publish, date_expiry, price) " \
+            "VALUES(:idea_id, :seller_id, :title, :short_desc, :long_desc, :date_publish, :date_expiry, :price)"
+    data = {
+        "idea_id": idea_id,
+        "seller_id": token_data.user_id,
+        "title": title,
+        "short_desc": short_desc,
+        "long_desc": long_desc,
+        "date_publish": datetime.now().isoformat(),
+        "date_expiry": (datetime.now() + IDEA_EXPIRES_AFTER).isoformat(),
+        "price": price
+    }
+    try:
+        await database.execute(query=query, values=data)
+        if categories is not None:
+            for category in categories:
+                await database.execute(
+                    query="INSERT INTO ideas_categories(idea_id, category) VALUES(:idea_id, :category)",
+                    values={"idea_id": idea_id, "category": category}
+                )
+    except IntegrityError as ex:
+        field = ex.args[1].split()[5]
+        if field == "'id'":
+            raise IdeaDuplicationError
+        else:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ex.__dict__)
+
+    # Saving title image
+    await save_file(file=image, kind="idea-title", uid=idea_id)
+
+    # Saving each file
+    if files is not None:
+        for file in files:
+            await save_file(file=file, kind="idea-file", uid=idea_id)
+
     return idea_id
 
 
