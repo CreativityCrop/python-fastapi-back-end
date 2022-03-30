@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends
-import mysql.connector
 from datetime import datetime
 from typing import Optional
+from fastapi_redis_cache import FastApiRedisCache, cache, cache_one_hour
+
 
 from app.config import DB_HOST, DB_USER, DB_PASS, DB_NAME, IDEA_EXPIRES_AFTER
 from app.database import database
@@ -20,6 +21,7 @@ router = APIRouter(
 
 
 @router.get("/get", response_model=IdeasList)
+@cache(expire=120)
 async def get_ideas(page: Optional[int] = 0, cat: Optional[str] = None):
     query = "SELECT " \
             "ideas.id, seller_id, title, short_desc, date_publish, date_expiry, price, " \
@@ -80,10 +82,11 @@ async def get_ideas(page: Optional[int] = 0, cat: Optional[str] = None):
             categories=idea["categories"],
             price=idea["price"]
         ), results))
-    )
+    ).dict()
 
 
 @router.get("/get/{idea_id}", response_model=IdeaFull)
+@cache_one_hour()
 async def get_idea_by_id(idea_id: str, token_data: AccessToken = Depends(get_token_data)):
     verify_idea_id(idea_id)
 
@@ -142,10 +145,11 @@ async def get_idea_by_id(idea_id: str, token_data: AccessToken = Depends(get_tok
         datePublish=result["date_publish"],
         dateExpiry=result["date_expiry"],
         dateBought=result["date_bought"]
-    )
+    ).dict()
 
 
 @router.get("/get-hottest", response_model=IdeasHottest)
+@cache(expire=120)
 async def get_hottest_ideas():
     query = "SELECT ideas.id, ideas.title, files.public_path AS image_url, " \
             "(SELECT COUNT(*) FROM ideas_likes WHERE idea_id=ideas.id) AS likes " \
@@ -160,7 +164,7 @@ async def get_hottest_ideas():
             imageURL=idea["image_url"],
             likes=idea["likes"]
         ), results))
-    )
+    ).dict()
 
 
 @router.post("/post")

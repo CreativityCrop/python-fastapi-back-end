@@ -1,6 +1,5 @@
 from fastapi import APIRouter, File, UploadFile, Form, Depends, HTTPException
 from starlette import status
-import mysql.connector
 import stripe
 import aiofiles as aiofiles
 import hashlib

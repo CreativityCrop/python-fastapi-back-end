@@ -2,7 +2,6 @@ from fastapi import APIRouter, File, UploadFile, Depends, HTTPException
 from fastapi.responses import FileResponse
 from typing import Optional, List
 from datetime import datetime
-import mysql.connector
 import aiofiles as aiofiles
 import hashlib
 

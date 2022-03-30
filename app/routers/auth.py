@@ -1,6 +1,5 @@
 from fastapi import APIRouter, Header
 from fastapi.responses import RedirectResponse
-import mysql.connector
 import requests
 import json
 from datetime import datetime

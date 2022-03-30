@@ -1,6 +1,5 @@
 from fastapi import APIRouter, Request, Depends
 import stripe
-import mysql.connector
 
 from app.config import DB_HOST, DB_NAME, DB_PASS, DB_USER, STRIPE_API_KEY, STRIPE_WEBHOOK_SECRET
 from app.database import database

@@ -1,10 +1,13 @@
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import RedirectResponse
+from fastapi_redis_cache import FastApiRedisCache, cache
 
 from app.routers import auth, account, ideas, files, payment
 from app.internal import admin
 from app.database import database
+from app.config import REDIS_URL
+from app.models.token import AccessToken
 
 app = FastAPI(
     title="CreativityCrop API",
@@ -51,6 +54,13 @@ app.add_middleware(
 @app.on_event("startup")
 async def app_startup():
     await database.connect()
+    redis_cache = FastApiRedisCache()
+    redis_cache.init(
+        host_url=REDIS_URL,
+        prefix="cc-cache",
+        response_header="X-MyAPI-Cache",
+        ignore_arg_types=[AccessToken]
+    )
 
 
 @app.on_event("shutdown")
