@@ -4,6 +4,7 @@ import mysql.connector
 import stripe
 import aiofiles as aiofiles
 import hashlib
+from asyncmy.errors import IntegrityError
 
 from app.config import *
 from app.database import database
@@ -83,33 +84,43 @@ async def get_account(token_data: AccessToken = Depends(get_token_data)):
 
 
 @router.put("", response_model=AccountUpdate)
-async def update_account(avatar: Optional[UploadFile] = File(None),
-                         username: str = Form(None), email: str = Form(None), iban: str = Form(None),
-                         pass_hash: str = Form(None), token_data: AccessToken = Depends(get_token_data)):
-    is_db_up()
-    cursor = db.cursor(dictionary=True)
+async def update_account(
+        avatar: Optional[UploadFile] = File(None),
+        username: str = Form(None), email: str = Form(None), iban: str = Form(None),
+        pass_hash: str = Form(None), token_data: AccessToken = Depends(get_token_data)
+):
     result = AccountUpdate(status="none changed")
     if avatar is not None:
-        if avatar.content_type not in CDN_ALLOWED_CONTENT_TYPES:
+        if avatar.content_type not in CDN_IMAGE_TYPES:
             raise FiletypeNotAllowedError
         temp = await avatar.read()
-        async with aiofiles.open(f'{CDN_FILES_PATH + "accounts/" + avatar.filename}',
-                                 "wb") as directory:
+        async with aiofiles.open(
+                f'{CDN_FILES_PATH + "accounts/" + avatar.filename}', "wb"
+        ) as directory:
             await directory.write(temp)
         file_id = hashlib.sha256(
                 str(hashlib.sha256(temp).hexdigest() + "#USER" + str(token_data.user_id)).encode('utf-8')).hexdigest()
-        cursor.execute("REPLACE INTO files(id, name, size, absolute_path, public_path, content_type)"
-                       "VALUES(%s, %s, %s, %s, %s, %s)",
-                       (file_id, avatar.filename, avatar.spool_max_size,
-                        f'{CDN_FILES_PATH + "accounts/" + avatar.filename}',
-                        f'{CDN_URL + "accounts/" + avatar.filename}', avatar.content_type))
-        cursor.execute("UPDATE users SET avatar_id=%s WHERE id=%s", (file_id, token_data.user_id))
+        await database.execute(
+            query="REPLACE INTO files(id, name, size, absolute_path, public_path, content_type) "
+                  "VALUES(:id, :name, :size, :absolute_path, :public_path, :content_type)",
+            values={"id": file_id, "name": avatar.filename, "size": avatar.spool_max_size,
+                    "absolute_path": CDN_FILES_PATH + "accounts/" + avatar.filename,
+                    "public_path": CDN_URL + "accounts/" + avatar.filename,
+                    "content_type": avatar.content_type}
+        )
+        await database.execute(
+            query="UPDATE users SET avatar_id=:file_id WHERE id=:user_id",
+            values={"file_id": file_id, "user_id": token_data.user_id}
+        )
         result = AccountUpdate(status="success")
     if username is not None:
         try:
-            cursor.execute("UPDATE users SET username=%s WHERE id=%s", (username, token_data.user_id))
-        except mysql.connector.errors.IntegrityError as ex:
-            field = ex.msg.split()[5]
+            await database.execute(
+                query="UPDATE users SET username=:username WHERE id=:user_id",
+                values={"username": username, "user_id": token_data.user_id}
+            )
+        except IntegrityError as ex:
+            field = ex.args[1].split()[5]
             if field == "'username'":
                 raise UsernameDuplicateError
             else:
@@ -123,22 +134,28 @@ async def update_account(avatar: Optional[UploadFile] = File(None),
         )
     if email is not None:
         try:
-            cursor.execute("UPDATE users SET email=%s WHERE id=%s", (email, token_data.user_id))
-        except mysql.connector.errors.IntegrityError as ex:
-            field = ex.msg.split()[5]
+            await database.execute(
+                query="UPDATE users SET email=:email WHERE id=:user_id",
+                values={"email": email, "user_id": token_data.user_id}
+            )
+        except IntegrityError as ex:
+            field = ex.args[1].split()[5]
             if field == "'email'":
                 raise EmailDuplicateError
             else:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ex.__dict__)
         result = AccountUpdate(status="success")
     if iban is not None:
-        cursor.execute("UPDATE users SET iban=%s WHERE id=%s", (iban, token_data.user_id))
+        await database.execute(
+            query="UPDATE users SET iban=:iban WHERE id=:user_id",
+            values={"iban": iban, "user_id": token_data.user_id}
+        )
         result = AccountUpdate(status="success")
     if pass_hash is not None:
         salt = auth.generate_salt()
-        cursor.execute(
-            "UPDATE users SET salt=%s, pass_hash=%s WHERE id=%s",
-            (salt, auth.hash_password(pass_hash, salt), token_data.user_id)
+        await database.execute(
+            query="UPDATE users SET salt=:salt, pass_hash=:pass_hash WHERE id=:user_id",
+            values={"salt": salt, "pass_hash": auth.hash_password(pass_hash, salt), "user_id": token_data.user_id}
         )
         result = AccountUpdate(
             status="success",
@@ -146,7 +163,6 @@ async def update_account(avatar: Optional[UploadFile] = File(None),
                 accessToken=auth.create_access_token(AccessToken(user_id=token_data.user_id, user=token_data.user))
             )
         )
-    cursor.close()
     return result
 
 
@@ -233,7 +249,7 @@ async def get_ideas_bought_by_user(page: Optional[int] = 0, token_data: AccessTo
             "WHERE seller_id=:seller_id AND buyer_id IS NOT NULL AND buyer_id != -1 " \
             "ORDER BY date_publish LIMIT :start, :end"
     results = await database.fetch_all(
-        query=query, values={"seller_id": token_data.user_id, "start": page * load_count, "end": (page + 1) * load_count}
+        query=query, values={"seller_id": token_data.user_id, "start": page * load_count, "end": (page+1) * load_count}
     )
 
     # Convert list of sqlalchemy rows to dict, so it is possible to add new keys
