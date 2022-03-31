@@ -207,12 +207,14 @@ async def post_idea_dos(
         image: UploadFile = File(...),
         short_desc: str = Form(...),
         long_desc: str = Form(...),
-        categories: Optional[list] = Form(...),
+        categories: str = Form(None),
         price: float = Form(...),
         token_data: AccessToken = Depends(get_token_data),
 ):
     # Long description is used for id of the idea, because it must be unique
     idea_id = calculate_idea_id(long_desc)
+    # Multipart handles arrays as string seperated by commas, so split is needed
+    categories = categories.split(",") if categories is not None else None
 
     query = "INSERT INTO ideas(id, seller_id, title, short_desc, long_desc, date_publish, date_expiry, price) " \
             "VALUES(:idea_id, :seller_id, :title, :short_desc, :long_desc, :date_publish, :date_expiry, :price)"
