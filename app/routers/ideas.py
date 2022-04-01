@@ -213,6 +213,7 @@ async def post_idea_dos(
 ):
     # Long description is used for id of the idea, because it must be unique
     idea_id = calculate_idea_id(long_desc)
+
     # Multipart handles arrays as string seperated by commas, so split is needed
     categories = categories.split(",") if categories is not None else None
 

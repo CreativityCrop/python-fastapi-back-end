@@ -15,7 +15,7 @@ router = APIRouter(
     prefix="/admin",
     tags=["admin"],
     dependencies=[Depends(verify_admin_user)],
-    # include_in_schema=False
+    include_in_schema=False
 )
 
 router.include_router(ideas.router)
