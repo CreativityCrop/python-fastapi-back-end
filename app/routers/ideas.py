@@ -7,6 +7,7 @@ from app.config import DB_HOST, DB_USER, DB_PASS, DB_NAME, IDEA_EXPIRES_AFTER
 from app.database import database
 from app.dependencies import get_token_data
 from app.functions import verify_idea_id, calculate_idea_id, save_file
+from app.cache import invalidate_ideas
 from app.models.idea import IdeaPost, IdeaPartial, IdeaFile, IdeaFull, IdeaSmall
 from app.models.token import AccessToken
 from app.errors.ideas import *
@@ -85,7 +86,6 @@ async def get_ideas(page: Optional[int] = 0, cat: Optional[str] = None):
 
 
 @router.get("/get/{idea_id}", response_model=IdeaFull)
-@cache_one_hour()
 async def get_idea_by_id(idea_id: str, token_data: AccessToken = Depends(get_token_data)):
     verify_idea_id(idea_id)
 
@@ -251,6 +251,9 @@ async def post_idea_dos(
     if files is not None:
         for file in files:
             await save_file(file=file, kind="idea-file", uid=idea_id)
+
+    # Delete cache
+    invalidate_ideas()
 
     return idea_id
 

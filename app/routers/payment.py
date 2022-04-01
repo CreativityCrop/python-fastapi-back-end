@@ -5,6 +5,7 @@ from app.config import DB_HOST, DB_NAME, DB_PASS, DB_USER, STRIPE_API_KEY, STRIP
 from app.database import database
 from app.dependencies import get_token_data
 from app.functions import verify_idea_id
+from app.cache import invalidate_ideas
 from app.errors.payment import *
 from app.errors.ideas import IdeaNotFoundError
 from app.models.token import AccessToken
@@ -84,6 +85,9 @@ async def create_payment(idea_id: str, token_data: AccessToken = Depends(get_tok
     # Make the buyer_id -1 to stop it from appearing in the list of ideas for sale
     await database.execute(query="UPDATE ideas SET buyer_id=-1 WHERE id=:idea_id", values={"idea_id": idea_id})
 
+    # Delete cache so it disappears
+    invalidate_ideas()
+
     return ClientSecret(
         clientSecret=intent["client_secret"]
     )
@@ -156,13 +160,21 @@ async def webhook_received(request: Request):
     else:
         print('Unhandled event type {}'.format(event['type']))
 
+    print(intent)
     await database.execute(
-        query="UPDATE payments SET amount=:amount, currency=:currency, status=:status WHERE id=:id",
+        query="UPDATE payments "
+              "SET amount=:amount, currency=:currency, status=:status "
+              ", country=:country, last4=:last4, network=:network, receipt_url=:receipt_url "
+              "WHERE id=:id",
         values={
             "amount": intent["amount"],
             "currency": intent["currency"],
             "status": intent["status"],
-            "id": intent["id"]
+            "id": intent["id"],
+            "country": intent["charges"]["data"][0]["payment_method_details"]["card"]["country"],
+            "last4": intent["charges"]["data"][0]["payment_method_details"]["card"]["last4"],
+            "network": intent["charges"]["data"][0]["payment_method_details"]["card"]["network"],
+            "receipt_url": intent["charges"]["data"][0]["receipt_url"]
         }
     )
 

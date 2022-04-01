@@ -4,6 +4,7 @@ import redis
 from app.database import database
 from app.config import REDIS_PASS
 from app.internal.responses.ideas import Idea, Category, IdeasList
+from app.cache import invalidate_ideas
 
 router = APIRouter(
     prefix="/ideas",
@@ -50,10 +51,7 @@ async def get_ideas():
 @router.delete("/{idea_id}")
 async def delete_idea(idea_id: str):
     # Delete cache when deleting an idea
-    r = redis.Redis(host='localhost', password=REDIS_PASS, port=6379, db=0)
-    r.delete("cc-cache:app.routers.ideas.get_ideas*")
-    r.delete("cc-cache:app.routers.ideas.get_hottest_ideas()")
-    r.close()
+    invalidate_ideas()
 
     # Delete all idea entries
     await database.execute(
