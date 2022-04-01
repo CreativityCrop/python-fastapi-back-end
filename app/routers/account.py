@@ -12,7 +12,7 @@ from app.dependencies import get_token_data
 from app.errors.account import InvoiceUnavailableYetError, InvoiceAccessUnauthorizedError, InvoiceNotFoundError
 from app.errors.auth import EmailDuplicateError, UsernameDuplicateError
 from app.errors.files import FiletypeNotAllowedError
-from app.functions import verify_idea_id
+from app.functions import verify_idea_id, save_file
 from app.models.idea import IdeaFile
 from app.models.token import AccessToken
 from app.responses.account import *
@@ -90,23 +90,7 @@ async def update_account(
 ):
     result = AccountUpdate(status="none changed")
     if avatar is not None:
-        if avatar.content_type not in CDN_IMAGE_TYPES:
-            raise FiletypeNotAllowedError
-        temp = await avatar.read()
-        async with aiofiles.open(
-                f'{CDN_FILES_PATH + "accounts/" + avatar.filename}', "wb"
-        ) as directory:
-            await directory.write(temp)
-        file_id = hashlib.sha256(
-                str(hashlib.sha256(temp).hexdigest() + "#USER" + str(token_data.user_id)).encode('utf-8')).hexdigest()
-        await database.execute(
-            query="REPLACE INTO files(id, name, size, absolute_path, public_path, content_type) "
-                  "VALUES(:id, :name, :size, :absolute_path, :public_path, :content_type)",
-            values={"id": file_id, "name": avatar.filename, "size": avatar.spool_max_size,
-                    "absolute_path": CDN_FILES_PATH + "accounts/" + avatar.filename,
-                    "public_path": CDN_URL + "accounts/" + avatar.filename,
-                    "content_type": avatar.content_type}
-        )
+        file_id = await save_file(file=avatar, kind="avatar", uid=token_data.user_id)
         await database.execute(
             query="UPDATE users SET avatar_id=:file_id WHERE id=:user_id",
             values={"file_id": file_id, "user_id": token_data.user_id}

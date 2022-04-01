@@ -42,25 +42,31 @@ async def save_file(file: UploadFile, kind: str, uid: Optional[str] = None):
     #  - idea files -> uid is idea id
     #  - others -> uid is None or appended if provided
     if kind == 'avatar':
+        if file.content_type not in CDN_IMAGE_TYPES:
+            raise FiletypeNotAllowedError
         file_id = hashlib.sha256(
-            str(hashlib.sha256(temp).hexdigest() + "#USER" + uid).encode('utf-8')
+            str(hashlib.sha256(temp).hexdigest() + "#USER" + uid.__str__()).encode('utf-8')
         ).hexdigest()
         idea_id = None
-        filepath = f'avatars/user#{uid}-{file.filename}'
+        filepath = f'avatars/user{uid}-{file.filename}'.replace(' ', '')
     elif kind == 'idea-title':
+        if file.content_type not in CDN_IMAGE_TYPES:
+            raise FiletypeNotAllowedError
         file_id = uid
         idea_id = uid
-        filepath = f'ideas-titles/{uid}-{file.filename}'
+        filepath = f'ideas-titles/{uid}-{file.filename}'.replace(' ', '')
     elif kind == 'idea-file':
         file_id = hashlib.sha256(
             str(hashlib.sha256(temp).hexdigest() + "#IDEA" + uid).encode('utf-8')
         ).hexdigest()
         idea_id = uid
-        filepath = f'ideas-files/{uid}/{get_folder_for_file(file.content_type)}/{file.filename}'
+        filepath = f'ideas-files/{uid}/{get_folder_for_file(file.content_type)}/{file.filename}'.replace(' ', '')
     else:
+        if file.content_type not in CDN_ALLOWED_CONTENT_TYPES:
+            raise FiletypeNotAllowedError
         file_id = hashlib.sha256(temp).hexdigest()
         idea_id = None
-        filepath = f'others/{uid}_{file.filename}'
+        filepath = f'others/{uid}_{file.filename}'.replace(' ', '')
 
     # Create needed dirs if they don't exist
     os.makedirs(os.path.dirname(CDN_FILES_PATH + filepath), exist_ok=True)
@@ -71,7 +77,7 @@ async def save_file(file: UploadFile, kind: str, uid: Optional[str] = None):
     # Save info about file to database
     # TODO: if duplication error on id then file probably exists, contact security lol
     await database.execute(
-        query="INSERT INTO files(id, idea_id, name, size, absolute_path, public_path, content_type) "
+        query="REPLACE INTO files(id, idea_id, name, size, absolute_path, public_path, content_type) "
               "VALUES(:id, :idea_id, :name, :size, :absolute_path, :public_path, :content_type)",
         values={
             "id": file_id,
@@ -83,3 +89,4 @@ async def save_file(file: UploadFile, kind: str, uid: Optional[str] = None):
             "content_type": file.content_type
         }
     )
+    return file_id
