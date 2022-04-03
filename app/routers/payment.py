@@ -114,6 +114,9 @@ async def delete_payment(idea_id: str, _: AccessToken = Depends(get_token_data))
     await database.execute(query="DELETE FROM payments WHERE idea_id=:idea_id", values={"idea_id": idea_id})
     await database.execute(query="UPDATE ideas SET buyer_id=NULL WHERE id=:idea_id", values={"idea_id": idea_id})
 
+    # Delete cache so it disappears
+    invalidate_ideas()
+
     return {"status": "success"}
 
 
@@ -160,7 +163,6 @@ async def webhook_received(request: Request):
     else:
         print('Unhandled event type {}'.format(event['type']))
 
-    print(intent)
     await database.execute(
         query="UPDATE payments "
               "SET amount=:amount, currency=:currency, status=:status "
@@ -177,6 +179,9 @@ async def webhook_received(request: Request):
             "receipt_url": intent["charges"]["data"][0]["receipt_url"]
         }
     )
+
+    # Delete cache so it disappears
+    invalidate_ideas()
 
     if intent["status"] == "succeeded":
         await database.execute(

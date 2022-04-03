@@ -22,57 +22,57 @@ router = APIRouter(
 )
 
 
-@router.post("/upload")
-async def upload_files(
-        files: List[UploadFile],
-        idea_id: Optional[str] = None,
-        token_data: AccessToken = Depends(get_token_data)
-):
-    verify_idea_id(idea_id)
-    result = await database.fetch_one(
-        query="SELECT date_publish, seller_id FROM ideas WHERE id=:idea_id",
-        values={"idea_id": idea_id}
-    )
-
-    # Only idea seller can upload files
-    if token_data.user_id != result["seller_id"]:
-        raise UploadForbiddenError
-    # File upload is allowed for 5 minutes after idea is posted, to allow slow connections to complete successfully
-    if datetime.now() > result["date_publish"] + timedelta(minutes=5):
-        raise UploadTooLateError
-
-    for file in files:
-        if file.content_type not in CDN_ALLOWED_CONTENT_TYPES:
-            raise FiletypeNotAllowedError
-
-        # Open file for reading
-        temp = await file.read()
-        async with aiofiles.open(f'{CDN_FILES_PATH + get_folder_for_file(file.content_type) + idea_id + "_" + file.filename}', "wb") as directory:
-            await directory.write(temp)
-        # If filename starts with title, it is title image for idea, so file_id needs to be the same as idea_id
-        if file.filename.startswith("title-"):
-            file_id = idea_id
-        else:
-            file_id = hashlib.sha256(
-                str(hashlib.sha256(temp).hexdigest() + "#IDEA" + idea_id).encode('utf-8')
-            ).hexdigest()
-        # Save info about file to database
-        # TODO: if duplication error on id then file probably exists, contact security lol
-        await database.execute(
-            query="INSERT INTO files(id, idea_id, name, size, absolute_path, public_path, content_type) "
-                  "VALUES(:id, :idea_id, :name, :size, :absolute_path, :public_path, :content_type)",
-            values={
-                "id": file_id,
-                "idea_id": idea_id,
-                "name": file.filename,
-                "size": file.spool_max_size,
-                "absolute_path": f'{CDN_FILES_PATH + get_folder_for_file(file.content_type) + idea_id + "_" + file.filename}',
-                "public_path": f'{CDN_URL + get_folder_for_file(file.content_type) + idea_id + "_" + file.filename}',
-                "content_type": file.content_type
-            }
-        )
-
-    return {"status": "success"}
+# @router.post("/upload")
+# async def upload_files(
+#         files: List[UploadFile],
+#         idea_id: Optional[str] = None,
+#         token_data: AccessToken = Depends(get_token_data)
+# ):
+#     verify_idea_id(idea_id)
+#     result = await database.fetch_one(
+#         query="SELECT date_publish, seller_id FROM ideas WHERE id=:idea_id",
+#         values={"idea_id": idea_id}
+#     )
+#
+#     # Only idea seller can upload files
+#     if token_data.user_id != result["seller_id"]:
+#         raise UploadForbiddenError
+#     # File upload is allowed for 5 minutes after idea is posted, to allow slow connections to complete successfully
+#     if datetime.now() > result["date_publish"] + timedelta(minutes=5):
+#         raise UploadTooLateError
+#
+#     for file in files:
+#         if file.content_type not in CDN_ALLOWED_CONTENT_TYPES:
+#             raise FiletypeNotAllowedError
+#
+#         # Open file for reading
+#         temp = await file.read()
+#         async with aiofiles.open(f'{CDN_FILES_PATH + get_folder_for_file(file.content_type) + idea_id + "_" + file.filename}', "wb") as directory:
+#             await directory.write(temp)
+#         # If filename starts with title, it is title image for idea, so file_id needs to be the same as idea_id
+#         if file.filename.startswith("title-"):
+#             file_id = idea_id
+#         else:
+#             file_id = hashlib.sha256(
+#                 str(hashlib.sha256(temp).hexdigest() + "#IDEA" + idea_id).encode('utf-8')
+#             ).hexdigest()
+#         # Save info about file to database
+#         # TODO: if duplication error on id then file probably exists, contact security lol
+#         await database.execute(
+#             query="INSERT INTO files(id, idea_id, name, size, absolute_path, public_path, content_type) "
+#                   "VALUES(:id, :idea_id, :name, :size, :absolute_path, :public_path, :content_type)",
+#             values={
+#                 "id": file_id,
+#                 "idea_id": idea_id,
+#                 "name": file.filename,
+#                 "size": file.spool_max_size,
+#                 "absolute_path": f'{CDN_FILES_PATH + get_folder_for_file(file.content_type) + idea_id + "_" + file.filename}',
+#                 "public_path": f'{CDN_URL + get_folder_for_file(file.content_type) + idea_id + "_" + file.filename}',
+#                 "content_type": file.content_type
+#             }
+#         )
+#
+#     return {"status": "success"}
 
 
 @router.get("/download", response_class=FileResponse)
