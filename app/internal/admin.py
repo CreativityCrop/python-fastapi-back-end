@@ -26,10 +26,7 @@ router.include_router(payouts.router)
 # TODO: add authentication and maybe query for customizing the refresh period :)
 @router.websocket("/admin/log")
 async def websocket_endpoint(websocket: WebSocket, token: str = Query(None)):
-    await websocket.accept()
-    print("Connection accepted from " + websocket.client.host)
-    last_line = 0
-    try:
+    async def check_token():
         try:
             token_data = verify_access_token(token)
         except AccessTokenExpiredError:
@@ -48,21 +45,32 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(None)):
             await websocket.send_json({"Error": "You aren't allowed to view this content!"})
             await websocket.close()
             return
-        while True:
+
+    async def send_data(temp):
+        while str(websocket.client_state) == 'WebSocketState.CONNECTED':
             try:
                 file = open(file="./app.log", mode="r", encoding="ascii")
                 lines = file.readlines()
-                if len(lines) > last_line:
-                    for i in range(last_line, len(lines)):
+                if len(lines) > temp:
+                    for i in range(temp, len(lines)):
                         await websocket.send_text(lines[i].rstrip())
-                last_line = len(lines)
+                temp = len(lines)
                 file.close()
-                await asyncio.sleep(15)
+                await asyncio.sleep(1)
             except FileNotFoundError:
                 print("Log file not found")
                 await websocket.send_json({"Error": "Log file was not found :(!"})
                 await websocket.close()
                 return
-    except ConnectionClosedOK:
-        print("Connection closed by " + websocket.client.host)
-        await websocket.close()
+
+    async def watch_status():
+        while str(websocket.client_state) == 'WebSocketState.CONNECTED':
+            await websocket.receive()
+
+    await websocket.accept()
+    await check_token()
+    last_line = 0
+    print("Connection accepted from " + websocket.client.host)
+
+    await asyncio.gather(watch_status(), send_data(last_line))
+
