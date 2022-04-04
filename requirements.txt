@@ -47,3 +47,4 @@ websockets==10.2
 databases~=0.5.5
 asyncmy~=0.2.3
 redis~=4.2.0
+mysql-connector-python

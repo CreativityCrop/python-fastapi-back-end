@@ -1,12 +1,12 @@
 import mysql.connector
 import stripe
 
-from config import DB_HOST, DB_USER, DB_PASS, DB_NAME, STRIPE_API_KEY
+from app.config import DB_HOST, DB_USER, DB_PASS, DB_NAME, STRIPE_API_KEY
+from app.cache import invalidate_ideas
 
 stripe.api_key = str(STRIPE_API_KEY)
 
 
-# TODO: Add user cleanup
 def cleanup_database():
     print("Starting DB cleanup process")
 
@@ -33,10 +33,17 @@ def cleanup_database():
         )
         cursor.execute("DELETE FROM payments WHERE id = %s", (payment["id"],))
         cursor.execute("UPDATE ideas SET buyer_id = NULL WHERE id=%s", (payment["idea_id"],))
+    if payments is not None:
+        invalidate_ideas()
 
     # Delete old categories and likes from ideas that were deleted
     cursor.execute("DELETE FROM ideas_categories WHERE idea_id NOT IN (SELECT id FROM ideas)")
     cursor.execute("DELETE FROM ideas_likes WHERE idea_id NOT IN (SELECT id FROM ideas)")
+
+    # Delete users that did not verify their accounts on time
+    cursor.execute(
+        "DELETE FROM users WHERE verified=0 AND date_register < DATE_SUB(CURRENT_TIMESTAMP, INTERVAL 15 DAY)"
+    )
 
     # Close cursor and db everything is complete!
     cursor.close()
