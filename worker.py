@@ -40,9 +40,11 @@ def cleanup_database():
     cursor.execute("DELETE FROM ideas_categories WHERE idea_id NOT IN (SELECT id FROM ideas)")
     cursor.execute("DELETE FROM ideas_likes WHERE idea_id NOT IN (SELECT id FROM ideas)")
 
-    # Delete users that did not verify their accounts on time
+    # Delete users that did not verify their accounts after 15 days, there is check if user has ever logged in, if they
+    # have and verified is set to 0, then the account is disabled by the administrators
     cursor.execute(
-        "DELETE FROM users WHERE verified=0 AND date_register < DATE_SUB(CURRENT_TIMESTAMP, INTERVAL 15 DAY)"
+        "DELETE FROM users "
+        "WHERE verified=0 AND date_register < DATE_SUB(CURRENT_TIMESTAMP, INTERVAL 15 DAY) AND date_login IS NULL"
     )
 
     # Close cursor and db everything is complete!
