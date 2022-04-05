@@ -1,7 +1,10 @@
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
+
 from io import StringIO
 import csv
+import json
+import requests
 from datetime import datetime
 
 from app.config import MAILGUN_API_KEY
