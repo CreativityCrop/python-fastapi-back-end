@@ -2,7 +2,9 @@ from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from io import StringIO
 import csv
+from datetime import datetime
 
+from app.config import MAILGUN_API_KEY
 from app.database import database
 from app import authentication as auth
 from app.internal.models.users import PasswordUpdate
@@ -40,6 +42,24 @@ async def get_users():
 
 @router.delete("/{user_id}")
 async def delete_user(user_id: int):
+    user = await database.fetch_one(
+        query="SELECT email, first_name FROM users WHERE id=:user_id",
+        values={"user_id": user_id},
+    )
+    requests.post(
+        "https://api.eu.mailgun.net/v3/app.creativitycrop.tech/messages",
+        auth=("api", str(MAILGUN_API_KEY)),
+        data={
+            "from": "Friendly Bot from CreativityCrop <no-reply@app.creativitycrop.tech>",
+            "to": user["email"],
+            "subject": "CreativityCrop - Account Deleted",
+            "template": "delete-user",
+            'h:X-Mailgun-Variables': json.dumps({
+                "user_name": user["first_name"],
+                "current_year": datetime.now().year
+            })
+        }
+    )
     await database.execute(
         query="DELETE FROM users WHERE id=:user_id",
         values={"user_id": user_id}

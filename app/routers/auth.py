@@ -60,7 +60,7 @@ async def register_user(user: UserRegister):
         data={
             "from": "Friendly Bot from CreativityCrop <no-reply@app.creativitycrop.tech>",
             "to": user.email,
-            "subject": "CreativityCrop - Account Password Recovery  ",
+            "subject": "CreativityCrop - Account Verification",
             "template": "confirm-email",
             'h:X-Mailgun-Variables': json.dumps({
                 "user_name": user.first_name,
@@ -134,7 +134,7 @@ async def request_password_reset(email: UserPasswordReset):
         data={
             "from": "Friendly Bot from CreativityCrop <no-reply@app.creativitycrop.tech>",
             "to": user["email"],
-            "subject": "CreativityCrop - Account Password Recovery  ",
+            "subject": "CreativityCrop - Account Password Recovery",
             "template": "password-recovery",
             'h:X-Mailgun-Variables': json.dumps({
                 "user_name": user["first_name"],
