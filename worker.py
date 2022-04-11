@@ -46,26 +46,26 @@ def cleanup_database():
     # Delete users that did not verify their accounts after 15 days, there is check if user has ever logged in, if they
     # have and verified is set to 0, then the account is disabled by the administrators
     cursor.execute(
-        "SELECT id, email FROM users "
+        "SELECT id, first_name, email FROM users "
         "WHERE verified=0 AND date_register < DATE_SUB(CURRENT_TIMESTAMP, INTERVAL 15 DAY) AND date_login IS NULL "
     )
     users = cursor.fetchall()
     for user in users:
-        cursor.execute("DELETE FROM users WHERE id=%s", (user["id"],))
         requests.post(
             "https://api.eu.mailgun.net/v3/app.creativitycrop.tech/messages",
             auth=("api", str(MAILGUN_API_KEY)),
             data={
                 "from": "Friendly Bot from CreativityCrop <no-reply@app.creativitycrop.tech>",
-                "to": user.email,
+                "to": user["email"],
                 "subject": "CreativityCrop - Account Deleted",
                 "template": "delete-user",
                 'h:X-Mailgun-Variables': json.dumps({
-                    "user_name": user.first_name,
+                    "user_name": user["first_name"],
                     "current_year": datetime.now().year
                 })
             }
         )
+        cursor.execute("DELETE FROM users WHERE id=%s", (user["id"],))
 
     # Close cursor and db everything is complete!
     cursor.close()
