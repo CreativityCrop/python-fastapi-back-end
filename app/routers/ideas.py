@@ -289,6 +289,9 @@ async def like_idea(idea_id: str, token_data: AccessToken = Depends(get_token_da
     if result is None:
         raise IdeaNotFoundError
 
+    # Delete cache
+    invalidate_ideas()
+
     return Like(
         isLiked=is_liked,
         count=result["likes_count"]

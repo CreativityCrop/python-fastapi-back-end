@@ -162,7 +162,7 @@ async def webhook_received(request: Request):
         intent = event['data']['object']
     else:
         print('Unhandled event type {}'.format(event['type']))
-
+    print(intent["status"])
     await database.execute(
         query="UPDATE payments "
               "SET amount=:amount, currency=:currency, status=:status "
@@ -194,3 +194,19 @@ async def webhook_received(request: Request):
         )
 
     return {'status': 'success'}
+
+
+# Endpoint for checking status of payment, required to know what to show the user when redirected to their account
+@router.get("/status")
+async def order_status(payment_intent: str, redirect_status: str):
+    payment = await database.fetch_one(
+        query="SELECT * FROM payments WHERE id=:payment_id",
+        values={"payment_id": payment_intent}
+    )
+
+    if payment["status"] == "succeeded" and redirect_status == "succeeded":
+        return {"status": "succeeded", "message": None}
+    elif payment["status"] == "processing":
+        return {"message": "Your payment is being processed. Your idea should arrive soon."}
+    else:
+        return {"message": "Your idea should arrive soon. If a problem occurs, contact us!"}
