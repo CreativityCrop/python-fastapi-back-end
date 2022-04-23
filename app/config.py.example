@@ -14,6 +14,9 @@ DB_USER = 'user'
 DB_PASS = 'pass'
 DB_NAME = 'database'
 
+REDIS_PASS = 'pass'
+REDIS_URL = f'redis://:{REDIS_PASS}@{DB_HOST}:6379'
+
 SUPER_USERS = config("SUPER_USERS", cast=set, default={"username1", "username2"})
 
 # Stripe API keys

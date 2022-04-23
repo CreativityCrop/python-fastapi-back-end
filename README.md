@@ -1,13 +1,14 @@
 # CreativityCrop FastAPI Back End
 
-This is the back end (API) for the CreativityCrop project. Created with FastAPI and served by uvicorn and proxied by nginx.
+This is the back end (API) for the CreativityCrop project. Created with FastAPI, served by uvicorn and proxied by nginx.
 
 ## Prerequisites
 
 This python project requires the following pieces of software:
-* python 3.9
-* docker (only for deployment)
+* Python 3.9
+* Docker (only for deployment)
 * MySQL compatible database with a table from the provided `schema.sql`
+* Redis (optional - for cache)
 
 ## Installation
 
@@ -33,13 +34,13 @@ pip install -r requirements.txt
 
 ```bash
 # runs in development environment
-python main.py
+python main.py [dev](This is optional argument to enable reloading of files)
 
 # for production, you need to run docker and build a container
 docker build -t creativitycrop-api ./
 
 # then run the container
-docker run -p 8000:8000 creativitycrop-api
+docker run -itd --name container-name --net host -p 8000:8000 creativitycrop-api
 
 # executes automated tests
 pytest
