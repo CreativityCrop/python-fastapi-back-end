@@ -24,7 +24,7 @@ router.include_router(payouts.router)
 
 
 # TODO: add authentication and maybe query for customizing the refresh period :)
-@router.websocket("/admin/log")
+@router.websocket("/log")
 async def websocket_endpoint(websocket: WebSocket, token: str = Query(None)):
     async def check_token():
         try:
